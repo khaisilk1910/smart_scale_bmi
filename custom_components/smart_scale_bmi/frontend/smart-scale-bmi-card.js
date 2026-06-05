@@ -1,7 +1,7 @@
 (function () {
   "use strict";
 
-  const CARD_VERSION = "2026.06.05-add-fab-v13";
+  const CARD_VERSION = "2026.06.05-add-fab-v15";
 
   const GRADIENTS = [
     { value: "linear-gradient(135deg, #0f2027, #203a43, #2c5364)", label: "Ocean Night" },
@@ -931,22 +931,22 @@
           .ssb-add-fab {
             appearance:none;
             position:relative;
-            width:clamp(44px, 5.5vw, 62px);
-            height:clamp(44px, 5.5vw, 62px);
-            min-width:44px;
-            min-height:44px;
-            padding:0 0 .08em;
+            width:clamp(34px, 4.4cqw, 50px);
+            height:clamp(34px, 4.4cqw, 50px);
+            min-width:34px;
+            min-height:34px;
+            padding:0 0 .07em;
             display:inline-flex;
             align-items:center;
             justify-content:center;
             border-radius:999px;
-            border:2px solid color-mix(in srgb, var(--ssb-text-accent) 64%, var(--ssb-border-color));
+            border:clamp(1.5px, .22cqw, 2px) solid color-mix(in srgb, var(--ssb-text-accent) 64%, var(--ssb-border-color));
             color:var(--ssb-text-main);
             background:
               radial-gradient(circle at 34% 24%, color-mix(in srgb, #ffffff 42%, var(--ssb-text-accent)), transparent 34%),
               linear-gradient(135deg, color-mix(in srgb, var(--ssb-text-accent) 72%, var(--ssb-content-bg)), color-mix(in srgb, var(--ssb-content-bg) 78%, #000000));
-            box-shadow:0 14px 30px rgba(0,0,0,.34), 0 0 0 4px color-mix(in srgb, var(--ssb-text-accent) 18%, transparent), inset 0 1px 0 rgba(255,255,255,.35);
-            font-size:clamp(34px, 5.4vw, 52px);
+            box-shadow:0 clamp(8px, 1.4cqw, 14px) clamp(18px, 3cqw, 28px) rgba(0,0,0,.32), 0 0 0 clamp(2px, .36cqw, 4px) color-mix(in srgb, var(--ssb-text-accent) 18%, transparent), inset 0 1px 0 rgba(255,255,255,.35);
+            font-size:clamp(28px, 4.15cqw, 42px);
             line-height:1;
             font-weight:950;
             text-shadow:0 2px 5px rgba(0,0,0,.35);
@@ -956,14 +956,14 @@
           }
           .header-shell > .ssb-add-fab {
             position:absolute;
-            top:14%;
-            right:6.6%;
+            top:8px;
+            right:clamp(22px, 7.6cqw, 92px);
           }
           .ssb-add-fab:hover,
           .ssb-add-fab:focus-visible {
-            transform:translateY(-1px) scale(1.06);
+            transform:translateY(-1px) scale(1.05);
             filter:brightness(1.1);
-            box-shadow:0 18px 38px rgba(0,0,0,.42), 0 0 0 5px color-mix(in srgb, var(--ssb-text-accent) 22%, transparent), inset 0 1px 0 rgba(255,255,255,.42);
+            box-shadow:0 clamp(10px, 1.8cqw, 18px) clamp(24px, 4cqw, 36px) rgba(0,0,0,.40), 0 0 0 clamp(3px, .45cqw, 5px) color-mix(in srgb, var(--ssb-text-accent) 22%, transparent), inset 0 1px 0 rgba(255,255,255,.42);
             outline:none;
           }
           .ssb-add-fab:active { transform:translateY(0) scale(.98); }
@@ -1583,7 +1583,7 @@
             .header-shell { margin-bottom:10px; }
             .title-row { margin-bottom:7px; }
             .svg-header { border-radius:0 !important; margin-bottom:6px; }
-            .header-shell > .ssb-add-fab { top:8%; right:4%; width:42px; height:42px; min-width:42px; min-height:42px; font-size:32px; }
+            .header-shell > .ssb-add-fab { top:clamp(7px, 2.9cqw, 14px); right:clamp(16px, 6.5cqw, 36px); width:clamp(32px, 10cqw, 42px); height:clamp(32px, 10cqw, 42px); min-width:32px; min-height:32px; font-size:clamp(26px, 8.7cqw, 34px); }
             .ssb-add-fab::after { right:-4px; top:calc(100% + 8px); }
             .tabs { gap:12px; padding:0 2px; border-radius:0; }
             .tab-btn { min-width:108px; padding:7px 10px; border-radius:16px; }
