@@ -1,0 +1,18 @@
+{
+  "domain": "smart_scale_bmi",
+  "name": "Smart Scale BMI",
+  "codeowners": [
+    "@khaisilk1910"
+  ],
+  "config_flow": true,
+  "dependencies": [
+    "frontend",
+    "lovelace"
+  ],
+  "documentation": "https://github.com/khaisilk1910/smart_scale_bmi",
+  "integration_type": "hub",
+  "iot_class": "local_push",
+  "issue_tracker": "https://github.com/khaisilk1910/smart_scale_bmi/issues",
+  "requirements": [],
+  "version": "2026.06.05.5"
+}

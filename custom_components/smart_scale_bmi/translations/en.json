@@ -1,0 +1,50 @@
+{
+  "title": "Smart Scale BMI",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Add a smart-scale person",
+        "description": "Each entry is one person/profile ID on the scale. Pick the weight and profile ID sensors, then enter profile data so the integration can store measurement history and calculate BMI.",
+        "data": {
+          "weight_sensor": "Weight sensor",
+          "profile_sensor": "Scale profile ID sensor",
+          "profile_id": "Scale profile ID",
+          "person_name": "Name",
+          "birth_month": "Birth month",
+          "birth_year": "Birth year",
+          "gender": "Gender",
+          "height_m": "Height (m)",
+          "initial_weight_kg": "Initial weight (kg)"
+        }
+      }
+    },
+    "error": {
+      "name_required": "Please enter a name."
+    },
+    "abort": {
+      "already_configured": "This profile is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Edit smart-scale person",
+        "description": "Edit the source sensors, profile ID, name, birth date, gender, height, or initial weight.",
+        "data": {
+          "weight_sensor": "Weight sensor",
+          "profile_sensor": "Scale profile ID sensor",
+          "profile_id": "Scale profile ID",
+          "person_name": "Name",
+          "birth_month": "Birth month",
+          "birth_year": "Birth year",
+          "gender": "Gender",
+          "height_m": "Height (m)",
+          "initial_weight_kg": "Initial weight (kg)"
+        }
+      }
+    },
+    "error": {
+      "name_required": "Please enter a name."
+    }
+  }
+}

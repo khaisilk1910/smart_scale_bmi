@@ -1,0 +1,50 @@
+{
+  "title": "Smart Scale BMI",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Thêm người dùng cân thông minh",
+        "description": "Mỗi entry là một người/profile ID trên cân. Chọn sensor cân nặng và sensor ID profile, sau đó nhập thông tin cá nhân để tích hợp tự lưu lịch sử cân và tính BMI.",
+        "data": {
+          "weight_sensor": "Sensor cân nặng",
+          "profile_sensor": "Sensor ID của cân",
+          "profile_id": "ID profile trên cân",
+          "person_name": "Tên",
+          "birth_month": "Tháng sinh",
+          "birth_year": "Năm sinh",
+          "gender": "Giới tính",
+          "height_m": "Chiều cao (m)",
+          "initial_weight_kg": "Cân nặng khởi tạo (kg)"
+        }
+      }
+    },
+    "error": {
+      "name_required": "Vui lòng nhập tên."
+    },
+    "abort": {
+      "already_configured": "Profile này đã được cấu hình."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Chỉnh sửa người dùng cân thông minh",
+        "description": "Sửa sensor đầu vào, ID profile, tên, ngày sinh, giới tính, chiều cao hoặc cân nặng khởi tạo.",
+        "data": {
+          "weight_sensor": "Sensor cân nặng",
+          "profile_sensor": "Sensor ID của cân",
+          "profile_id": "ID profile trên cân",
+          "person_name": "Tên",
+          "birth_month": "Tháng sinh",
+          "birth_year": "Năm sinh",
+          "gender": "Giới tính",
+          "height_m": "Chiều cao (m)",
+          "initial_weight_kg": "Cân nặng khởi tạo (kg)"
+        }
+      }
+    },
+    "error": {
+      "name_required": "Vui lòng nhập tên."
+    }
+  }
+}

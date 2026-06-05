@@ -1,0 +1,88 @@
+add_measurement:
+  name: Thêm lần cân thủ công
+  description: Thêm một lần cân thủ công cho một entry Smart Scale BMI.
+  fields:
+    entry_id:
+      name: Entry ID
+      description: Entry ID của người cần thêm dữ liệu cân.
+      required: true
+      example: "01JX0000000000000000000000"
+      selector:
+        text:
+    weight_kg:
+      name: Cân nặng
+      description: Cân nặng cần lưu.
+      required: true
+      example: 65.52
+      selector:
+        number:
+          min: 1
+          max: 300
+          step: 0.01
+          unit_of_measurement: kg
+          mode: box
+    measured_at:
+      name: Thời gian cân
+      description: Thời gian cân dạng ISO, bỏ trống sẽ dùng thời gian hiện tại.
+      required: false
+      example: "2026-06-05T10:30:00+07:00"
+      selector:
+        text:
+
+delete_measurement:
+  name: Xóa lần cân
+  description: Xóa một bản ghi cân theo measurement_id trong attributes của sensor.
+  fields:
+    entry_id:
+      name: Entry ID
+      description: Entry ID của người có bản ghi cần xóa.
+      required: true
+      example: "01JX0000000000000000000000"
+      selector:
+        text:
+    measurement_id:
+      name: Measurement ID
+      description: ID bản ghi cân cần xóa.
+      required: true
+      example: 1
+      selector:
+        number:
+          min: 1
+          max: 999999999
+          step: 1
+          mode: box
+
+update_measurement:
+  name: Sửa lần cân
+  description: Chỉ sửa cân nặng của một bản ghi cân theo measurement_id. BMI và cảnh báo sẽ được tính lại, thời gian cân được giữ nguyên.
+  fields:
+    entry_id:
+      name: Entry ID
+      description: Entry ID của người có bản ghi cần sửa.
+      required: true
+      example: "01JX0000000000000000000000"
+      selector:
+        text:
+    measurement_id:
+      name: Measurement ID
+      description: ID bản ghi cân cần sửa.
+      required: true
+      example: 1
+      selector:
+        number:
+          min: 1
+          max: 999999999
+          step: 1
+          mode: box
+    weight_kg:
+      name: Cân nặng
+      description: Cân nặng mới.
+      required: true
+      example: 65.52
+      selector:
+        number:
+          min: 1
+          max: 300
+          step: 0.01
+          unit_of_measurement: kg
+          mode: box
