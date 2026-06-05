@@ -1,7 +1,7 @@
 (function () {
   "use strict";
 
-  const CARD_VERSION = "2026.06.05-add-fab-v15";
+  const CARD_VERSION = "2026.06.05-add-fab-v16";
 
   const GRADIENTS = [
     { value: "linear-gradient(135deg, #0f2027, #203a43, #2c5364)", label: "Ocean Night" },
@@ -956,8 +956,14 @@
           }
           .header-shell > .ssb-add-fab {
             position:absolute;
-            top:8px;
-            right:clamp(22px, 7.6cqw, 92px);
+            --ssb-header-fab-size:clamp(24px, 7.8cqw, 44px);
+            width:var(--ssb-header-fab-size);
+            height:var(--ssb-header-fab-size);
+            min-width:var(--ssb-header-fab-size);
+            min-height:var(--ssb-header-fab-size);
+            font-size:clamp(19px, 6.1cqw, 34px);
+            top:clamp(6px, 2.2cqw, 12px);
+            right:clamp(6px, 2.2cqw, 24px);
           }
           .ssb-add-fab:hover,
           .ssb-add-fab:focus-visible {
