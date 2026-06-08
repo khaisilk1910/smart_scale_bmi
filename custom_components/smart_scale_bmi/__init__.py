@@ -1,6 +1,7 @@
 """Smart Scale BMI integration."""
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 from functools import partial
@@ -14,7 +15,6 @@ from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
 from homeassistant.core import CoreState, HomeAssistant, ServiceCall, callback
 from homeassistant.components.http import StaticPathConfig
 from homeassistant.components.frontend import add_extra_js_url
-from homeassistant.components.lovelace.resources import ResourceStorageCollection
 from homeassistant.loader import async_get_integration
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.dispatcher import async_dispatcher_send
@@ -81,42 +81,48 @@ SERVICE_UPDATE_MEASUREMENT_SCHEMA = vol.Schema(
 )
 
 
-async def init_resource(hass: HomeAssistant, url: str, ver: str) -> None:
-    """Register the Lovelace custom card resource."""
-    url_with_version = f"{url}?hacstag={ver}"
-    add_extra_js_url(hass, url_with_version)
+async def init_resource(hass: HomeAssistant, url: str, ver: str) -> bool:
+    """Register the Lovelace custom card resource with safe cache busting.
 
-    async def _register_resource(*args: Any) -> None:
-        lovelace = hass.data.get("lovelace")
-        if not lovelace:
-            return
+    Avoid registering the same JS twice via both add_extra_js_url and Lovelace
+    resources. Duplicate registration can make browsers keep a failed custom-card
+    load per origin/IP/domain until the cache is cleared.
+    """
+    url_with_version = f"{url}?v={ver}"
 
-        resources = getattr(lovelace, "resources", None) or lovelace.get("resources")
-        if not isinstance(resources, ResourceStorageCollection):
-            return
+    lovelace = hass.data.get("lovelace")
+    if not lovelace:
+        add_extra_js_url(hass, url_with_version)
+        return False
 
-        if not resources.loaded:
-            await resources.async_load()
+    resources = getattr(lovelace, "resources", None)
+    if resources is None and hasattr(lovelace, "get"):
+        resources = lovelace.get("resources")
 
-        for item in resources.async_items():
-            item_url = item.get("url", "")
-            base_url = item_url.split("?")[0]
-            if base_url == url:
-                if item_url != url_with_version:
-                    await resources.async_update_item(
-                        item["id"],
-                        {"res_type": "module", "url": url_with_version},
-                    )
-                return
+    if not resources or not hasattr(resources, "async_items"):
+        add_extra_js_url(hass, url_with_version)
+        return False
 
-        await resources.async_create_item(
-            {"res_type": "module", "url": url_with_version}
-        )
+    if hasattr(resources, "async_get_info"):
+        await resources.async_get_info()
+    elif hasattr(resources, "async_load") and not getattr(resources, "loaded", True):
+        await resources.async_load()
 
-    if hass.state == CoreState.running:
-        await _register_resource()
-    else:
-        hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, _register_resource)
+    for item in resources.async_items():
+        item_url = item.get("url", "")
+        base_url = item_url.split("?")[0]
+        if base_url == url:
+            if item_url != url_with_version:
+                await resources.async_update_item(
+                    item["id"],
+                    {"res_type": "module", "url": url_with_version},
+                )
+            return True
+
+    await resources.async_create_item(
+        {"res_type": "module", "url": url_with_version}
+    )
+    return True
 
 
 def _parse_profile_id(value: Any) -> int | None:
@@ -313,33 +319,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             file_path = hass.config.path(
                 "custom_components", DOMAIN, UI_DIR_PATH, file_name
             )
-            return str(int(os.path.getmtime(file_path)))
+            st = os.stat(file_path)
+            with open(file_path, "rb") as file_obj:
+                digest = hashlib.sha256(file_obj.read()).hexdigest()[:12]
+            return f"{fallback}-{int(st.st_mtime)}-{st.st_size}-{digest}"
         except Exception:
             return fallback
 
-    async def _async_register_frontend_resource() -> None:
-        try:
-            ver_card = await hass.async_add_executor_job(
-                get_file_version, CARD_FILE, fallback_version
-            )
-            await init_resource(hass, f"{UI_URL_BASE}/{CARD_FILE}", ver_card)
-        except Exception as err:  # pragma: no cover - defensive runtime logging
-            _LOGGER.exception("Could not register Smart Scale BMI card resource: %s", err)
-
-    if hass.state == CoreState.running:
-        resource_task = hass.async_create_task(_async_register_frontend_resource())
-        entry.async_on_unload(resource_task.cancel)
-    else:
-        @callback
-        def _schedule_resource_registration(*_: Any) -> None:
-            hass.async_create_task(_async_register_frontend_resource())
-
-        entry.async_on_unload(
-            hass.bus.async_listen_once(
-                EVENT_HOMEASSISTANT_STARTED,
-                _schedule_resource_registration,
-            )
+    try:
+        ver_card = await hass.async_add_executor_job(
+            get_file_version, CARD_FILE, fallback_version
         )
+        await init_resource(hass, f"{UI_URL_BASE}/{CARD_FILE}", ver_card)
+    except Exception as err:  # pragma: no cover - defensive runtime logging
+        _LOGGER.exception("Could not register Smart Scale BMI card resource: %s", err)
 
     config_data = get_config(entry)
     storage_dir = hass.config.path(DB_DIR)
