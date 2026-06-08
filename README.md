@@ -5,10 +5,23 @@
 - Thêm, Sửa, Xóa người cần theo dõi trong tích hợp
 - Nếu không dùng cân Smart (dùng cân Hòa Phát :D) có thể thêm Input Text cho 2 sensor cần có và 2 Template Sensor để lấy giá trị từ 2 Input Text tương ứng sẽ để nhập thủ công theo dõi thủ công cân nặng
 
+
 # Yêu cầu:
 - Có sẵn cân và đã được đưa lên Home Assistant ( mình dùng cân Xiaomi Mijia S200)
 - Cần có ID 
 - Đã thêm các người dùng vào ứng dụng cân và nhớ ID của người đã thêm trên ứng dụng để khi thêm trong tích hợp cho chính xác.
+
+
+## Cài đặt
+
+1. Nhấn nút bên dưới để thêm vào HACS trên Home Assistant.
+
+   [![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=khaisilk1910&repository=smart_scale_bmi&category=integration)
+
+   - Sau khi thêm trong HACS và khởi động lại Home Assistant
+     
+   - Vào Settings -> Integrations -> Add integration nhập `Smart Scale BMI` để thêm
+
 
 # Automation thông báo
 - Thông báo ra loa và gửi tin nhắn Zalo(cần cài tích hợp Zalo)
