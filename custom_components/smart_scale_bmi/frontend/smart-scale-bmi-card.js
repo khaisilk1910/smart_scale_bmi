@@ -1969,13 +1969,15 @@
   }
 
   window.customCards = window.customCards || [];
-  window.customCards.push({
-    type: "smart-scale-bmi-card",
-    name: "Smart Scale BMI Card",
-    description: "Auto-discover Smart Scale BMI entries, show mobile-first tabs, draw weight bars, BMI state labels, and add/edit/delete records with themed in-card popups.",
-    preview: true,
-    documentationURL: "https://github.com/khaisilk1910/smart_scale_bmi",
-  });
+  if (!window.customCards.some((card) => card.type === "smart-scale-bmi-card")) {
+    window.customCards.push({
+      type: "smart-scale-bmi-card",
+      name: "Smart Scale BMI Card",
+      description: "Auto-discover Smart Scale BMI entries, show mobile-first tabs, draw weight bars, BMI state labels, and add/edit/delete records with themed in-card popups.",
+      preview: true,
+      documentationURL: "https://github.com/khaisilk1910/smart_scale_bmi",
+    });
+  }
 
   console.info(`%cSMART-SCALE-BMI-CARD ${CARD_VERSION}`, "color:#4facfe;font-weight:700;");
 })();
