@@ -1,7 +1,7 @@
 (function () {
   "use strict";
 
-  const CARD_VERSION = "2026.06.08-dropdown-dark-fix-v21";
+  const CARD_VERSION = "2026.06.08-stat-2x2-fab-up-fix-v22";
 
   const GRADIENTS = [
     { value: "linear-gradient(135deg, #0f2027, #203a43, #2c5364)", label: "Ocean Night" },
@@ -1449,7 +1449,7 @@
           .stat-grid {
             margin-top:clamp(12px, 2.8vw, 18px);
             display:grid;
-            grid-template-columns:repeat(3, minmax(0, 1fr));
+            grid-template-columns:repeat(2, minmax(0, 1fr)) !important;
             gap:10px;
           }
           .stat-card {
@@ -1703,7 +1703,7 @@
             .title-row { margin-bottom:7px; }
             .svg-header { border-radius:0 !important; margin-bottom:6px; }
             .header-shell > .ssb-add-fab {
-              top:clamp(2px, .8cqw, 5px);
+              top:clamp(-4px, -.75cqw, -1px);
               right:clamp(3px, 1.5cqw, 8px);
               width:clamp(20px, 5.8cqw, 28px);
               height:clamp(20px, 5.8cqw, 28px);
@@ -1780,7 +1780,7 @@
             .avatar { border-radius:14px; }
             .hero-metrics { grid-template-columns:repeat(2, minmax(0, 1fr)); }
             .hero-metrics .badge { grid-column:1 / -1; }
-            .stat-grid { grid-template-columns:1fr; }
+            .stat-grid { grid-template-columns:repeat(2, minmax(0, 1fr)) !important; gap:7px; }
             .big-metric { min-width:0; padding:9px 10px; }
             .tabs { padding-top:4px; padding-bottom:5px; min-height:calc(52px + 9px); }
             .tab-btn { min-width:112px; min-height:52px; padding:7px 24px 7px 10px; border-radius:16px; }
@@ -1792,7 +1792,7 @@
             .bmi-dot { width:8px; }
             .svg-header { border-radius:0 !important; }
             .header-shell > .ssb-add-fab {
-              top:clamp(1px, .6cqw, 3px);
+              top:clamp(-3px, -.7cqw, -1px);
               right:clamp(2px, 1.1cqw, 5px);
               width:clamp(18px, 5.5cqw, 22px);
               height:clamp(18px, 5.5cqw, 22px);
@@ -1806,6 +1806,15 @@
             .header-shell > .ssb-add-fab:focus-visible { transform:scale(1.03); }
             .ssb-add-fab::after { display:none; }
             .status-badge { min-height:32px; padding:7px 11px; font-size:12px; }
+          }
+          /* v20 final overrides: keep 4 info blocks as 2 columns x 2 rows, and nudge the small header + button upward safely. */
+          .stat-grid { grid-template-columns:repeat(2, minmax(0, 1fr)) !important; }
+          @container (max-width: 560px) {
+            .header-shell > .ssb-add-fab { top:clamp(-4px, -.75cqw, -1px) !important; }
+          }
+          @container (max-width: 360px) {
+            .stat-grid { grid-template-columns:repeat(2, minmax(0, 1fr)) !important; }
+            .header-shell > .ssb-add-fab { top:clamp(-3px, -.7cqw, -1px) !important; }
           }
         </style>
       `;
