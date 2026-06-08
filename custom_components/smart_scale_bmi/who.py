@@ -379,24 +379,40 @@ def calculate_bmi(weight_kg: float, height_m: float) -> float:
 
 
 def classify_adult_bmi(bmi: float) -> dict[str, Any]:
-    """Classify BMI using adult thresholds."""
+    """Classify BMI using WHO/CDC adult thresholds.
+
+    BMI is a screening indicator: categories are the same for adult men and
+    women, but they do not diagnose body fatness or health by themselves.
+    """
     b = float(bmi)
-    if b < 18.5:
+    if b < 16.0:
+        warning = "gầy nặng"
+    elif b < 17.0:
+        warning = "gầy vừa"
+    elif b < 18.5:
         warning = "thiếu cân"
-    elif b < 25:
-        warning = "tốt"
-    elif b < 30:
+    elif b < 25.0:
+        warning = "bình thường"
+    elif b < 30.0:
         warning = "thừa cân"
+    elif b < 35.0:
+        warning = "béo phì độ I"
+    elif b < 40.0:
+        warning = "béo phì độ II"
     else:
-        warning = "béo phì"
+        warning = "béo phì độ III"
 
     return {
         "warning": warning,
-        "standard": "BMI người lớn",
+        "standard": "WHO/CDC BMI người lớn",
         "cutoffs": {
+            "severe_thin": 16.0,
+            "moderate_thin": 17.0,
             "thin": 18.5,
             "overweight": 25.0,
-            "obese": 30.0,
+            "obesity_class_1": 30.0,
+            "obesity_class_2": 35.0,
+            "obesity_class_3": 40.0,
         },
     }
 
@@ -424,7 +440,7 @@ def classify_child_bmi(bmi: float, gender: str, age_months: int) -> dict[str, An
     elif b < sd2neg:
         warning = "gầy"
     elif b <= sd1:
-        warning = "tốt"
+        warning = "bình thường"
     elif b <= sd2:
         warning = "thừa cân"
     else:
@@ -440,6 +456,112 @@ def classify_child_bmi(bmi: float, gender: str, age_months: int) -> dict[str, An
             "obese": sd2,
         },
     }
+
+
+def format_weight_standard_delta(
+    weight_kg: float,
+    height_m: float,
+    gender: str,
+    age_months: int | None,
+    warning: str | None = None,
+) -> str | None:
+    """Return how many kilograms are above or below the normal BMI range.
+
+    The returned text is suitable for a Home Assistant sensor attribute, for
+    example: "thừa 4.52 kg" or "thiếu 1.43 kg".  It returns None when the
+    BMI is inside the normal range or when the embedded standard cannot
+    determine a normal weight range, such as children under 5 years old.
+    """
+    weight = float(weight_kg)
+    height = float(height_m)
+    if weight <= 0 or height <= 0:
+        return None
+
+    low_bmi: float
+    high_bmi: float
+
+    if age_months is not None and 0 <= int(age_months) <= WHO_MAX_MONTHS:
+        months = int(age_months)
+        if months < WHO_MIN_MONTHS:
+            return None
+        gender_key = gender if gender in (GENDER_MALE, GENDER_FEMALE) else GENDER_MALE
+        _sd3neg, sd2neg, sd1, _sd2 = WHO_BMI_CUTOFFS[gender_key][months]
+        low_bmi = sd2neg
+        high_bmi = sd1
+    else:
+        low_bmi = 18.5
+        high_bmi = 25.0
+
+    height_squared = height * height
+    min_normal_weight = low_bmi * height_squared
+    max_normal_weight = high_bmi * height_squared
+
+    normalized_warning = (warning or "").strip().lower()
+    underweight_warnings = {"gầy nặng", "gầy vừa", "gầy", "thiếu cân"}
+    overweight_warnings = {"thừa cân", "béo phì", "béo phì độ i", "béo phì độ ii", "béo phì độ iii"}
+
+    if normalized_warning in underweight_warnings or weight < min_normal_weight:
+        missing = max(0.0, min_normal_weight - weight)
+        return f"thiếu {missing:.2f} kg"
+
+    if normalized_warning in overweight_warnings or weight > max_normal_weight:
+        excess = max(0.0, weight - max_normal_weight)
+        return f"thừa {excess:.2f} kg"
+
+    return None
+
+
+def nutrition_advice_for_warning(warning: str | None, age_months: int | None = None) -> str:
+    """Return concise nutrition and lifestyle advice for the BMI category."""
+    normalized_warning = (warning or "").strip().lower()
+    try:
+        months = int(age_months) if age_months is not None else None
+    except (TypeError, ValueError):
+        months = None
+
+    if months is not None and 0 <= months < WHO_MIN_MONTHS:
+        return (
+            "Trẻ dưới 5 tuổi: BMI hiện chưa đủ để tư vấn theo bảng 5-19 tuổi; "
+            "nên đánh giá bằng chuẩn tăng trưởng WHO 0-5 tuổi và hỏi bác sĩ/dinh dưỡng."
+        )
+
+    child_prefix = ""
+    if months is not None and WHO_MIN_MONTHS <= months <= WHO_MAX_MONTHS:
+        child_prefix = (
+            "Trẻ/vị thành niên: ưu tiên tăng trưởng khỏe mạnh, không tự ăn kiêng khắt khe; "
+            "nên trao đổi bác sĩ/dinh dưỡng nếu gầy, thừa cân hoặc béo phì. "
+        )
+
+    base = (
+        "Ăn đa dạng, cân bằng và điều độ: ưu tiên rau, trái cây nguyên quả, ngũ cốc nguyên hạt, "
+        "đậu/hạt và nguồn đạm nạc; hạn chế thực phẩm siêu chế biến, đồ uống có đường, chất béo bão hòa/trans fat và muối."
+    )
+
+    if normalized_warning in {"gầy nặng", "gầy vừa", "gầy", "thiếu cân"}:
+        return (
+            child_prefix
+            + "Cần tăng năng lượng bằng thực phẩm giàu dinh dưỡng, không chỉ tăng đồ ngọt/chất béo rỗng: "
+            "thêm bữa phụ, sữa/sữa chua, trứng, cá/thịt nạc, đậu, hạt, dầu thực vật tốt và ngũ cốc nguyên hạt; "
+            "kết hợp tập sức mạnh phù hợp. Nếu sụt cân nhanh, gầy nặng hoặc mệt kéo dài, nên khám chuyên môn."
+        )
+
+    if normalized_warning in {"thừa cân", "béo phì", "béo phì độ i", "béo phì độ ii", "béo phì độ iii"}:
+        return (
+            child_prefix
+            + "Ưu tiên giảm năng lượng dư thừa theo cách bền vững: tăng rau, trái cây nguyên quả, ngũ cốc nguyên hạt và đạm nạc; "
+            "giảm khẩu phần đồ chiên/rán, thức ăn nhanh, đồ uống có đường, bánh kẹo và rượu bia; "
+            "duy trì vận động aerobic thường xuyên và tập sức mạnh ít nhất 2 ngày/tuần khi phù hợp sức khỏe."
+        )
+
+    if normalized_warning in {"bình thường", "tốt"}:
+        return (
+            child_prefix
+            + "Đang trong vùng BMI bình thường; tiếp tục duy trì cân nặng bằng chế độ ăn đa dạng, đủ chất, "
+            "khẩu phần phù hợp mức vận động và hoạt động thể lực đều đặn. "
+            + base
+        )
+
+    return child_prefix + base
 
 
 def classify_bmi(

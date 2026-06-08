@@ -24,6 +24,7 @@ from .const import (
     SIGNAL_UPDATE_SENSORS,
 )
 from .database import get_config, get_latest_measurement, get_recent_measurements
+from .who import format_weight_standard_delta, nutrition_advice_for_warning
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -101,6 +102,7 @@ class SmartScaleBMISensor(SensorEntity):
                 "weight_sensor": config[CONF_WEIGHT_SENSOR],
                 "profile_sensor": config[CONF_PROFILE_SENSOR],
                 "warning": "đang tải dữ liệu",
+                "nutrition_advice": "Chưa có dữ liệu BMI để đưa ra lời khuyên dinh dưỡng.",
                 "recent_measurements": [],
             }
             return
@@ -144,12 +146,23 @@ class SmartScaleBMISensor(SensorEntity):
                 "weight_sensor": config[CONF_WEIGHT_SENSOR],
                 "profile_sensor": config[CONF_PROFILE_SENSOR],
                 "warning": "chưa có dữ liệu",
+                "nutrition_advice": "Chưa có dữ liệu BMI để đưa ra lời khuyên dinh dưỡng.",
                 "recent_measurements": [],
             }
             return
 
         self._attr_native_value = float(latest["bmi"])
-        self._attr_extra_state_attributes = {
+        latest_warning = str(latest.get("warning") or "")
+        latest_age_months = latest.get("age_months")
+        weight_standard_delta = format_weight_standard_delta(
+            float(latest["weight_kg"]),
+            float(latest["height_m"]),
+            str(latest.get("gender") or config[CONF_GENDER]),
+            latest_age_months,
+            latest_warning,
+        )
+        nutrition_advice = nutrition_advice_for_warning(latest_warning, latest_age_months)
+        attrs: dict[str, Any] = {
             "entry_id": self._entry_id,
             "measurement_id": latest["id"],
             "profile_id": latest["profile_id"],
@@ -163,11 +176,19 @@ class SmartScaleBMISensor(SensorEntity):
             "weight_kg": latest["weight_kg"],
             "bmi": latest["bmi"],
             "warning": latest["warning"],
-            "standard": latest["standard"],
-            "measured_at": latest["measured_at"],
-            "weight_sensor": latest["source_weight_sensor"],
-            "profile_sensor": latest["source_profile_sensor"],
-            "source_weight_last_changed": latest["source_weight_last_changed"],
-            "source_profile_last_changed": latest["source_profile_last_changed"],
-            "recent_measurements": recent,
         }
+        if weight_standard_delta is not None:
+            attrs["weight_standard_delta"] = weight_standard_delta
+        attrs.update(
+            {
+                "standard": latest["standard"],
+                "nutrition_advice": nutrition_advice,
+                "measured_at": latest["measured_at"],
+                "weight_sensor": latest["source_weight_sensor"],
+                "profile_sensor": latest["source_profile_sensor"],
+                "source_weight_last_changed": latest["source_weight_last_changed"],
+                "source_profile_last_changed": latest["source_profile_last_changed"],
+                "recent_measurements": recent,
+            }
+        )
+        self._attr_extra_state_attributes = attrs
