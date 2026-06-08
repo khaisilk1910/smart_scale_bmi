@@ -1,5 +1,6 @@
 # Smart Scale BMI
 - Theo dõi cân nặng và chỉ số BMI tự động mỗi lần cân
+- Có sẵn các sensor để tạo thông báo mỗi lần cân
 - Đưa ra cảnh báo Thừa, Thiếu,.. theo tiêu chuẩn quốc tế
 - Thêm, Sửa, Xóa người cần theo dõi trong tích hợp
 - Nếu không dùng cân Smart (dùng cân Hòa Phát :D) có thể thêm Input Text cho 2 sensor cần có và 2 Template Sensor để lấy giá trị từ 2 Input Text tương ứng sẽ để nhập thủ công theo dõi thủ công cân nặng
