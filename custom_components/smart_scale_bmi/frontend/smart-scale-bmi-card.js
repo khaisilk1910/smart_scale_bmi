@@ -1,7 +1,7 @@
 (function () {
   "use strict";
 
-  const CARD_VERSION = "2026.06.05-add-fab-v16";
+  const CARD_VERSION = "2026.06.08-tabs-padding-fix-v19";
 
   const GRADIENTS = [
     { value: "linear-gradient(135deg, #0f2027, #203a43, #2c5364)", label: "Ocean Night" },
@@ -101,7 +101,7 @@
     const normalized = normalizeText(value);
     const label = cleanWarningLabel(value);
     if (normalized.includes("tot") || normalized.includes("binh thuong") || normalized.includes("khoe")) {
-      return { className: "ok", emoji: "😊", label: label === "-" ? "tốt" : label };
+      return { className: "ok", emoji: "😊", label: label === "-" ? "bình thường" : label };
     }
     if (normalized.includes("thua")) {
       return { className: "warn", emoji: "😬", label: label === "-" ? "thừa cân" : label };
@@ -109,11 +109,11 @@
     if (normalized.includes("beo")) {
       return { className: "bad", emoji: "😟", label: label === "-" ? "béo phì" : label };
     }
-    if (normalized.includes("gay nang") || normalized.includes("nang")) {
+    if (normalized.includes("gay nang") || normalized.includes("suy dinh duong nang")) {
       return { className: "bad", emoji: "😰", label: label === "-" ? "gầy nặng" : label };
     }
     if (normalized.includes("gay") || normalized.includes("thieu")) {
-      return { className: "bad", emoji: "😕", label: label === "-" ? "gầy" : label };
+      return { className: "warn", emoji: "😕", label: label === "-" ? "thiếu cân" : label };
     }
     return { className: "neutral", emoji: "😐", label };
   }
@@ -290,6 +290,8 @@
             entry_id: item.entry_id || a.entry_id || "",
             warning: a.warning || "",
             standard: a.standard || "",
+            weight_standard_delta: a.weight_standard_delta || "",
+            nutrition_advice: a.nutrition_advice || "",
             weight_kg: a.weight_kg ?? "",
             bmi: a.bmi ?? "",
             measured_at: a.measured_at || "",
@@ -756,6 +758,8 @@
         : "-";
       const trendClass = Number.isFinite(deltaWeight) ? (Math.abs(deltaWeight) < 0.05 ? "neutral" : (deltaWeight > 0 ? "warn" : "ok")) : "neutral";
       const standard = a.standard || a.last_standard || "";
+      const weightStandardDelta = a.weight_standard_delta || "";
+      const nutritionAdvice = a.nutrition_advice || "";
       const age = a.age || a.age_text || "";
       const gender = a.gender || a.sex || "";
       const height = a.height_m ? `${this._fmtNum(a.height_m, 2)} m` : "";
@@ -784,7 +788,10 @@
             <div class="stat-card"><span>Lần cân cuối</span><b>${this._fmtDate(measuredAt)}</b></div>
             <div class="stat-card ${trendClass}"><span>Xu hướng ${records.length} lần</span><b>${escapeHtml(trendText)}</b></div>
             ${cfg.show_standard ? `<div class="stat-card"><span>Chuẩn</span><b>${escapeHtml(standard || "-")}</b></div>` : ""}
+            ${weightStandardDelta ? `<div class="stat-card ${warningClass}"><span>Lệch chuẩn cân nặng</span><b>${escapeHtml(weightStandardDelta)}</b></div>` : ""}
           </div>
+
+          ${nutritionAdvice ? `<div class="advice-card ${warningClass}"><span>Lời khuyên dinh dưỡng</span><p>${escapeHtml(nutritionAdvice)}</p></div>` : ""}
 
           ${cfg.show_charts ? this._combinedChart(records) : ""}
           ${cfg.show_table ? this._recordList(records, entryId) : ""}
@@ -866,7 +873,8 @@
             position:relative;
             margin-bottom:clamp(12px, 2.4vw, 18px);
             border-radius:0;
-            overflow:visible;
+            overflow:hidden;
+            isolation:isolate;
           }
           .title-row {
             display:flex;
@@ -956,14 +964,15 @@
           }
           .header-shell > .ssb-add-fab {
             position:absolute;
-            --ssb-header-fab-size:clamp(24px, 7.8cqw, 44px);
+            --ssb-header-fab-size:clamp(24px, 6.3cqw, 44px);
             width:var(--ssb-header-fab-size);
             height:var(--ssb-header-fab-size);
             min-width:var(--ssb-header-fab-size);
             min-height:var(--ssb-header-fab-size);
-            font-size:clamp(19px, 6.1cqw, 34px);
-            top:clamp(6px, 2.2cqw, 12px);
-            right:clamp(6px, 2.2cqw, 24px);
+            font-size:clamp(18px, 4.9cqw, 34px);
+            top:clamp(4px, 1.4cqw, 10px);
+            right:clamp(4px, 1.6cqw, 18px);
+            z-index:3;
           }
           .ssb-add-fab:hover,
           .ssb-add-fab:focus-visible {
@@ -1123,9 +1132,12 @@
             display:flex;
             gap:14px;
             margin:0 0 clamp(12px, 2.4vw, 18px);
-            padding:0 2px;
+            padding:7px 4px 9px;
+            min-height:calc(58px + 16px);
+            align-items:center;
             overflow-x:auto;
             scrollbar-width: thin;
+            scroll-snap-type:x proximity;
             background:transparent !important;
             border:0 !important;
             border-radius:0;
@@ -1134,37 +1146,77 @@
             -webkit-backdrop-filter:none !important;
           }
           .tab-btn {
+            --tab-accent:var(--ssb-text-accent);
             appearance:none;
-            border:1px solid var(--ssb-border-color) !important;
-            border-radius:18px;
-            padding:8px 12px;
-            background:var(--ssb-content-bg) !important;
+            position:relative;
+            overflow:hidden;
+            border:1px solid color-mix(in srgb, var(--tab-accent) 28%, var(--ssb-border-color)) !important;
+            border-radius:20px;
+            padding:9px 14px 9px 12px;
+            background:
+              linear-gradient(135deg, rgba(255,255,255,.12), rgba(255,255,255,.035)),
+              color-mix(in srgb, var(--ssb-content-bg) 88%, #000000) !important;
             color:var(--ssb-text-secondary);
             cursor:pointer;
-            min-width:118px;
+            min-width:128px;
+            min-height:58px;
             text-align:left;
-            transition:transform .18s ease, opacity .18s ease, background .18s ease, border-color .18s ease, box-shadow .18s ease;
+            transition:transform .18s ease, opacity .18s ease, background .18s ease, border-color .18s ease, box-shadow .18s ease, filter .18s ease;
             flex: 0 0 auto;
             display:inline-flex;
             align-items:center;
             gap:10px;
-            box-shadow:var(--ssb-element-shadow) !important;
+            box-shadow:0 8px 20px rgba(0,0,0,.18), inset 0 1px 0 rgba(255,255,255,.10) !important;
             backdrop-filter: blur(var(--ssb-blur));
             -webkit-backdrop-filter: blur(var(--ssb-blur));
+            scroll-snap-align:start;
           }
+          .tab-btn::before {
+            content:"";
+            position:absolute;
+            inset:0 auto 0 0;
+            width:4px;
+            background:linear-gradient(180deg, color-mix(in srgb, var(--tab-accent) 95%, #ffffff), color-mix(in srgb, var(--tab-accent) 65%, transparent));
+            opacity:.72;
+          }
+          .tab-btn::after {
+            content:"✓";
+            position:absolute;
+            top:6px;
+            right:8px;
+            width:18px;
+            height:18px;
+            display:grid;
+            place-items:center;
+            border-radius:999px;
+            background:var(--tab-accent);
+            color:#061014;
+            font-size:12px;
+            font-weight:950;
+            line-height:1;
+            box-shadow:0 4px 12px color-mix(in srgb, var(--tab-accent) 42%, transparent);
+            opacity:0;
+            transform:scale(.72);
+            transition:opacity .16s ease, transform .16s ease;
+          }
+          .tab-btn.ok { --tab-accent:var(--ssb-ok); }
+          .tab-btn.warn { --tab-accent:var(--ssb-warn); }
+          .tab-btn.bad { --tab-accent:var(--ssb-bad); }
           .tab-copy {
             display:flex;
             flex-direction:column;
             justify-content:center;
             min-width:0;
+            position:relative;
+            z-index:1;
           }
-          .tab-name { display:block; color:var(--ssb-text-main); font-weight:900; white-space:nowrap; font-size:14px; line-height:1.15; overflow:hidden; text-overflow:ellipsis; max-width:96px; }
+          .tab-name { display:block; color:var(--ssb-text-main); font-weight:950; white-space:nowrap; font-size:15px; line-height:1.12; overflow:hidden; text-overflow:ellipsis; max-width:98px; letter-spacing:.05px; }
           .tab-status {
             display:block;
             color:var(--ssb-text-secondary);
             font-size:11px;
-            font-weight:800;
-            margin-top:4px;
+            font-weight:900;
+            margin-top:5px;
             white-space:nowrap;
             line-height:1.1;
             max-width:100%;
@@ -1177,28 +1229,42 @@
             width:38px;
             height:38px;
             flex:0 0 38px;
-            border-radius:0;
-            font-size:30px;
+            border-radius:999px;
+            font-size:28px;
             line-height:1;
-            background:transparent !important;
-            box-shadow:none !important;
+            background:color-mix(in srgb, var(--tab-accent) 22%, rgba(255,255,255,.10)) !important;
+            border:1px solid color-mix(in srgb, var(--tab-accent) 35%, rgba(255,255,255,.22));
+            box-shadow:inset 0 1px 0 rgba(255,255,255,.22), 0 6px 14px rgba(0,0,0,.16) !important;
+            position:relative;
+            z-index:1;
           }
           .tab-label {
             display:inline-block;
             overflow:hidden;
             text-overflow:ellipsis;
             transform:translateY(.1px);
-            max-width:96px;
+            max-width:98px;
+            padding:3px 7px;
+            border-radius:999px;
+            color:var(--tab-accent);
+            background:color-mix(in srgb, var(--tab-accent) 16%, transparent);
+            border:1px solid color-mix(in srgb, var(--tab-accent) 26%, transparent);
           }
-          .tab-btn.ok .tab-label { color:var(--ssb-ok); }
-          .tab-btn.warn .tab-label { color:var(--ssb-warn); }
-          .tab-btn.bad .tab-label { color:var(--ssb-bad); }
-          .tab-btn:hover { transform:translateY(-1px); background:var(--ssb-content-bg) !important; border-color:rgba(255,255,255,.38) !important; }
-          .tab-btn.active { background:rgba(255,255,255,.16) !important; color:var(--ssb-text-main); border-color:rgba(255,255,255,.42) !important; box-shadow:0 10px 22px rgba(0,0,0,.18), inset 0 1px 0 rgba(255,255,255,.16) !important; }
-          .tab-btn.active .tab-name { color:var(--ssb-text-accent); }
-          .tab-btn.ok.active .tab-name { color:var(--ssb-ok); }
-          .tab-btn.warn.active .tab-name { color:var(--ssb-warn); }
-          .tab-btn.bad.active .tab-name { color:var(--ssb-bad); }
+          .tab-btn:hover { transform:translateY(-2px); filter:brightness(1.06); border-color:color-mix(in srgb, var(--tab-accent) 58%, var(--ssb-border-color)) !important; }
+          .tab-btn.active {
+            transform:translateY(-1px);
+            background:
+              radial-gradient(circle at 20% 8%, color-mix(in srgb, var(--tab-accent) 32%, transparent), transparent 34%),
+              linear-gradient(135deg, color-mix(in srgb, var(--tab-accent) 30%, var(--ssb-content-bg)), color-mix(in srgb, var(--ssb-content-bg) 78%, #000000)) !important;
+            color:var(--ssb-text-main);
+            border-color:color-mix(in srgb, var(--tab-accent) 72%, rgba(255,255,255,.44)) !important;
+            box-shadow:0 12px 28px rgba(0,0,0,.28), 0 0 0 2px color-mix(in srgb, var(--tab-accent) 20%, transparent), inset 0 1px 0 rgba(255,255,255,.22) !important;
+          }
+          .tab-btn.active::before { width:100%; opacity:.16; }
+          .tab-btn.active::after { opacity:1; transform:scale(1); }
+          .tab-btn.active .tab-name { color:var(--ssb-text-main); text-shadow:0 1px 4px rgba(0,0,0,.32); padding-right:14px; }
+          .tab-btn.active .tab-emoji { background:color-mix(in srgb, var(--tab-accent) 38%, rgba(255,255,255,.12)) !important; border-color:color-mix(in srgb, var(--tab-accent) 78%, #ffffff); box-shadow:0 0 0 3px color-mix(in srgb, var(--tab-accent) 18%, transparent), inset 0 1px 0 rgba(255,255,255,.34), 0 8px 18px rgba(0,0,0,.24) !important; }
+          .tab-btn.active .tab-label { color:#061014; background:var(--tab-accent); border-color:transparent; }
           .person {
             margin-top:0;
             padding:clamp(12px, 2.8vw, 20px);
@@ -1235,7 +1301,7 @@
             bottom:clamp(6px, 2cqw, 18px);
             opacity:.10;
           }
-          .hero, .stat-grid, .chart-card, .records { position:relative; z-index:1; }
+          .hero, .stat-grid, .advice-card, .chart-card, .records { position:relative; z-index:1; }
           .person::before {
             content:"";
             position:absolute;
@@ -1382,6 +1448,20 @@
           .stat-card b { color:var(--ssb-text-main); font-size:clamp(13px, 3.2vw, 16px); line-height:1.25; word-break:break-word; }
           .stat-card.ok { border-color:color-mix(in srgb, var(--ssb-ok) 44%, transparent); }
           .stat-card.warn { border-color:color-mix(in srgb, var(--ssb-warn) 44%, transparent); }
+          .stat-card.bad { border-color:color-mix(in srgb, var(--ssb-bad) 44%, transparent); }
+          .advice-card {
+            margin-top:clamp(12px, 2.8vw, 18px);
+            border-radius:18px;
+            padding:clamp(12px, 2.8vw, 15px);
+            background:rgba(255,255,255,.08);
+            border:1px solid rgba(255,255,255,.10);
+            min-width:0;
+          }
+          .advice-card.ok { border-color:color-mix(in srgb, var(--ssb-ok) 38%, transparent); }
+          .advice-card.warn { border-color:color-mix(in srgb, var(--ssb-warn) 38%, transparent); }
+          .advice-card.bad { border-color:color-mix(in srgb, var(--ssb-bad) 38%, transparent); }
+          .advice-card span { display:block; color:var(--ssb-text-secondary); font-size:11px; font-weight:850; margin-bottom:6px; }
+          .advice-card p { margin:0; color:var(--ssb-text-main); font-size:clamp(12px, 3vw, 14px); line-height:1.45; font-weight:700; }
           .chart-card {
             margin-top:clamp(12px, 2.8vw, 18px);
             border-radius:22px;
@@ -1578,27 +1658,62 @@
           .missing { color: var(--error-color); }
           @container (max-width: 760px) {
             .hero { grid-template-columns:1fr; }
-            .hero-metrics { justify-content:stretch; width:100%; }
-            .big-metric { flex:1 1 120px; text-align:left; }
-            .stat-grid { grid-template-columns:1fr; }
+            .hero-metrics {
+              display:grid;
+              grid-template-columns:repeat(3, minmax(0, 1fr));
+              align-items:stretch;
+              justify-content:stretch;
+              width:100%;
+            }
+            .big-metric {
+              min-width:0;
+              width:100%;
+              text-align:left;
+              box-sizing:border-box;
+            }
+            .hero-metrics .badge {
+              width:100%;
+              min-width:0;
+              justify-content:center;
+            }
+            .status-badge .badge-label { max-width:100%; }
+            .stat-grid { grid-template-columns:repeat(2, minmax(0, 1fr)); }
+            .stat-grid > .stat-card:nth-child(3):last-child { grid-column:1 / -1; }
             .chart-top { flex-direction:column; }
             .legend { justify-content:flex-start; }
           }
           @container (max-width: 560px) {
             .card-content { padding:10px; }
-            .header-shell { margin-bottom:10px; }
+            .header-shell { margin-bottom:10px; overflow:hidden; }
             .title-row { margin-bottom:7px; }
             .svg-header { border-radius:0 !important; margin-bottom:6px; }
-            .header-shell > .ssb-add-fab { top:clamp(7px, 2.9cqw, 14px); right:clamp(16px, 6.5cqw, 36px); width:clamp(32px, 10cqw, 42px); height:clamp(32px, 10cqw, 42px); min-width:32px; min-height:32px; font-size:clamp(26px, 8.7cqw, 34px); }
-            .ssb-add-fab::after { right:-4px; top:calc(100% + 8px); }
-            .tabs { gap:12px; padding:0 2px; border-radius:0; }
-            .tab-btn { min-width:108px; padding:7px 10px; border-radius:16px; }
-            .tab-emoji { width:34px; height:34px; flex-basis:34px; font-size:27px; }
-            .tab-name, .tab-label { max-width:84px; }
+            .header-shell > .ssb-add-fab {
+              top:0;
+              right:clamp(3px, 1.5cqw, 8px);
+              width:clamp(22px, 6.6cqw, 30px);
+              height:clamp(22px, 6.6cqw, 30px);
+              min-width:clamp(22px, 6.6cqw, 30px);
+              min-height:clamp(22px, 6.6cqw, 30px);
+              font-size:clamp(17px, 5cqw, 23px);
+              border-width:1.3px;
+              transform:translateY(-8%);
+              box-shadow:0 5px 12px rgba(0,0,0,.28), 0 0 0 2px color-mix(in srgb, var(--ssb-text-accent) 14%, transparent), inset 0 1px 0 rgba(255,255,255,.32);
+            }
+            .header-shell > .ssb-add-fab:hover,
+            .header-shell > .ssb-add-fab:focus-visible { transform:translateY(-10%) scale(1.04); }
+            .ssb-add-fab::after { right:0; top:calc(100% + 6px); }
+            .tabs { gap:10px; padding:8px 3px 9px; min-height:calc(56px + 18px); border-radius:0; }
+            .tab-btn { min-width:122px; min-height:56px; padding:8px 26px 8px 11px; border-radius:18px; }
+            .tab-btn::after { top:5px; right:6px; width:17px; height:17px; font-size:11px; }
+            .tab-emoji { width:34px; height:34px; flex-basis:34px; font-size:25px; }
+            .tab-name { max-width:76px; font-size:14px; }
+            .tab-label { max-width:82px; padding:2px 6px; }
             .person { border-radius:20px; padding:12px; }
             .hero-main { align-items:flex-start; }
-            .hero-metrics { display:grid; grid-template-columns:1fr; gap:8px; width:100%; }
-            .hero-metrics .badge { width:max-content; }
+            .hero-metrics { grid-template-columns:repeat(2, minmax(0, 1fr)); gap:8px; width:100%; }
+            .hero-metrics .badge { grid-column:1 / -1; justify-content:center; width:100%; }
+            .stat-grid { grid-template-columns:repeat(2, minmax(0, 1fr)); gap:8px; }
+            .stat-grid > .stat-card:nth-child(3):last-child { grid-column:1 / -1; }
             .chart-card { padding:10px; border-radius:18px; }
             .chart-stage { height:220px; min-height:210px; }
             .bmi-dot { width:9px; border-width:1.6px; }
@@ -1648,14 +1763,30 @@
             .title-row { align-items:center; }
             .count-pill { min-width:28px; height:24px; padding:0 8px; }
             .avatar { border-radius:14px; }
-            .hero-metrics { grid-template-columns:1fr; }
-            .big-metric { min-width:0; }
-            .tab-btn { min-width:96px; }
-            .tab-emoji { width:32px; height:32px; flex-basis:32px; font-size:26px; }
+            .hero-metrics { grid-template-columns:repeat(2, minmax(0, 1fr)); }
+            .hero-metrics .badge { grid-column:1 / -1; }
+            .stat-grid { grid-template-columns:1fr; }
+            .big-metric { min-width:0; padding:9px 10px; }
+            .tabs { padding-top:8px; padding-bottom:9px; min-height:calc(52px + 18px); }
+            .tab-btn { min-width:112px; min-height:52px; padding:7px 24px 7px 10px; border-radius:16px; }
+            .tab-btn::after { width:16px; height:16px; font-size:10px; top:5px; right:6px; }
+            .tab-emoji { width:31px; height:31px; flex-basis:31px; font-size:23px; }
+            .tab-name { max-width:68px; font-size:13px; }
+            .tab-label { max-width:72px; padding:2px 5px; }
             .chart-stage { height:210px; }
             .bmi-dot { width:8px; }
             .svg-header { border-radius:0 !important; }
-            .header-shell > .ssb-add-fab { top:6%; right:3.4%; width:38px; height:38px; min-width:38px; min-height:38px; font-size:30px; border-width:1.6px; }
+            .header-shell > .ssb-add-fab {
+              top:0;
+              right:clamp(2px, 1.1cqw, 5px);
+              width:clamp(19px, 6.4cqw, 24px);
+              height:clamp(19px, 6.4cqw, 24px);
+              min-width:clamp(19px, 6.4cqw, 24px);
+              min-height:clamp(19px, 6.4cqw, 24px);
+              font-size:clamp(15px, 4.9cqw, 19px);
+              border-width:1.1px;
+              transform:translateY(-10%);
+            }
             .ssb-add-fab::after { display:none; }
             .status-badge { min-height:32px; padding:7px 11px; font-size:12px; }
           }
