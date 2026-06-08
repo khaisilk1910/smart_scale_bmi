@@ -1,7 +1,7 @@
 (function () {
   "use strict";
 
-  const CARD_VERSION = "2026.06.08-tabs-padding-fix-v19";
+  const CARD_VERSION = "2026.06.08-dropdown-dark-fix-v21";
 
   const GRADIENTS = [
     { value: "linear-gradient(135deg, #0f2027, #203a43, #2c5364)", label: "Ocean Night" },
@@ -871,9 +871,9 @@
           }
           .header-shell {
             position:relative;
-            margin-bottom:clamp(12px, 2.4vw, 18px);
+            margin-bottom:clamp(10px, 2vw, 16px);
             border-radius:0;
-            overflow:hidden;
+            overflow:visible;
             isolation:isolate;
           }
           .title-row {
@@ -1099,6 +1099,20 @@
             outline:none;
             box-shadow:inset 0 1px 0 rgba(255,255,255,.08);
           }
+          .ssb-field select {
+            color-scheme:dark;
+          }
+          .ssb-field select option,
+          .ssb-field select optgroup {
+            background-color:#0b1116 !important;
+            color:#ffffff !important;
+          }
+          .ssb-field select option:checked,
+          .ssb-field select option:hover,
+          .ssb-field select option:focus {
+            background-color:#203a43 !important;
+            color:#ffffff !important;
+          }
           .ssb-field input:focus, .ssb-field select:focus {
             border-color:var(--ssb-text-accent);
             box-shadow:0 0 0 3px color-mix(in srgb, var(--ssb-text-accent) 20%, transparent), inset 0 1px 0 rgba(255,255,255,.08);
@@ -1130,12 +1144,13 @@
           .empty.compact { margin-top: 12px; padding: 12px; }
           .tabs {
             display:flex;
-            gap:14px;
-            margin:0 0 clamp(12px, 2.4vw, 18px);
-            padding:7px 4px 9px;
-            min-height:calc(58px + 16px);
+            gap:12px;
+            margin:0 0 clamp(8px, 1.8vw, 12px);
+            padding:4px 4px 6px;
+            min-height:calc(58px + 10px);
             align-items:center;
             overflow-x:auto;
+            overflow-y:visible;
             scrollbar-width: thin;
             scroll-snap-type:x proximity;
             background:transparent !important;
@@ -1250,7 +1265,7 @@
             background:color-mix(in srgb, var(--tab-accent) 16%, transparent);
             border:1px solid color-mix(in srgb, var(--tab-accent) 26%, transparent);
           }
-          .tab-btn:hover { transform:translateY(-2px); filter:brightness(1.06); border-color:color-mix(in srgb, var(--tab-accent) 58%, var(--ssb-border-color)) !important; }
+          .tab-btn:hover { transform:translateY(-1px); filter:brightness(1.06); border-color:color-mix(in srgb, var(--tab-accent) 58%, var(--ssb-border-color)) !important; }
           .tab-btn.active {
             transform:translateY(-1px);
             background:
@@ -1684,25 +1699,25 @@
           }
           @container (max-width: 560px) {
             .card-content { padding:10px; }
-            .header-shell { margin-bottom:10px; overflow:hidden; }
+            .header-shell { margin-bottom:8px; overflow:visible; }
             .title-row { margin-bottom:7px; }
             .svg-header { border-radius:0 !important; margin-bottom:6px; }
             .header-shell > .ssb-add-fab {
-              top:0;
+              top:clamp(2px, .8cqw, 5px);
               right:clamp(3px, 1.5cqw, 8px);
-              width:clamp(22px, 6.6cqw, 30px);
-              height:clamp(22px, 6.6cqw, 30px);
-              min-width:clamp(22px, 6.6cqw, 30px);
-              min-height:clamp(22px, 6.6cqw, 30px);
-              font-size:clamp(17px, 5cqw, 23px);
+              width:clamp(20px, 5.8cqw, 28px);
+              height:clamp(20px, 5.8cqw, 28px);
+              min-width:clamp(20px, 5.8cqw, 28px);
+              min-height:clamp(20px, 5.8cqw, 28px);
+              font-size:clamp(16px, 4.4cqw, 22px);
               border-width:1.3px;
-              transform:translateY(-8%);
+              transform:none;
               box-shadow:0 5px 12px rgba(0,0,0,.28), 0 0 0 2px color-mix(in srgb, var(--ssb-text-accent) 14%, transparent), inset 0 1px 0 rgba(255,255,255,.32);
             }
             .header-shell > .ssb-add-fab:hover,
-            .header-shell > .ssb-add-fab:focus-visible { transform:translateY(-10%) scale(1.04); }
+            .header-shell > .ssb-add-fab:focus-visible { transform:scale(1.04); }
             .ssb-add-fab::after { right:0; top:calc(100% + 6px); }
-            .tabs { gap:10px; padding:8px 3px 9px; min-height:calc(56px + 18px); border-radius:0; }
+            .tabs { gap:9px; padding:5px 3px 6px; min-height:calc(56px + 11px); border-radius:0; }
             .tab-btn { min-width:122px; min-height:56px; padding:8px 26px 8px 11px; border-radius:18px; }
             .tab-btn::after { top:5px; right:6px; width:17px; height:17px; font-size:11px; }
             .tab-emoji { width:34px; height:34px; flex-basis:34px; font-size:25px; }
@@ -1767,7 +1782,7 @@
             .hero-metrics .badge { grid-column:1 / -1; }
             .stat-grid { grid-template-columns:1fr; }
             .big-metric { min-width:0; padding:9px 10px; }
-            .tabs { padding-top:8px; padding-bottom:9px; min-height:calc(52px + 18px); }
+            .tabs { padding-top:4px; padding-bottom:5px; min-height:calc(52px + 9px); }
             .tab-btn { min-width:112px; min-height:52px; padding:7px 24px 7px 10px; border-radius:16px; }
             .tab-btn::after { width:16px; height:16px; font-size:10px; top:5px; right:6px; }
             .tab-emoji { width:31px; height:31px; flex-basis:31px; font-size:23px; }
@@ -1777,16 +1792,18 @@
             .bmi-dot { width:8px; }
             .svg-header { border-radius:0 !important; }
             .header-shell > .ssb-add-fab {
-              top:0;
+              top:clamp(1px, .6cqw, 3px);
               right:clamp(2px, 1.1cqw, 5px);
-              width:clamp(19px, 6.4cqw, 24px);
-              height:clamp(19px, 6.4cqw, 24px);
-              min-width:clamp(19px, 6.4cqw, 24px);
-              min-height:clamp(19px, 6.4cqw, 24px);
-              font-size:clamp(15px, 4.9cqw, 19px);
+              width:clamp(18px, 5.5cqw, 22px);
+              height:clamp(18px, 5.5cqw, 22px);
+              min-width:clamp(18px, 5.5cqw, 22px);
+              min-height:clamp(18px, 5.5cqw, 22px);
+              font-size:clamp(14px, 4.4cqw, 18px);
               border-width:1.1px;
-              transform:translateY(-10%);
+              transform:none;
             }
+            .header-shell > .ssb-add-fab:hover,
+            .header-shell > .ssb-add-fab:focus-visible { transform:scale(1.03); }
             .ssb-add-fab::after { display:none; }
             .status-badge { min-height:32px; padding:7px 11px; font-size:12px; }
           }
