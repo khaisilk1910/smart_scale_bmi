@@ -12,7 +12,7 @@
 - Đã thêm các người dùng vào ứng dụng cân và nhớ ID của người đã thêm trên ứng dụng để khi thêm trong tích hợp cho chính xác.
 
 
-## Cài đặt
+# Cài đặt
 
 1. Nhấn nút bên dưới để thêm vào HACS trên Home Assistant.
 
