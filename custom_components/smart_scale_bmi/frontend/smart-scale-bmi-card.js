@@ -1,7 +1,7 @@
 (function () {
   "use strict";
 
-  const CARD_VERSION = "2026.06.08-stat-2x2-fab-up-fix-v22";
+  const CARD_VERSION = "2026.06.10-weight-labels-v23";
 
   const GRADIENTS = [
     { value: "linear-gradient(135deg, #0f2027, #203a43, #2c5364)", label: "Ocean Night" },
@@ -459,6 +459,14 @@
         const y = Math.max(14, yBmi(p.value) - 10);
         return `<text class="bmi-state-label" x="${x.toFixed(1)}" y="${y.toFixed(1)}">${this._fmtNum(p.value, 1)}</text>`;
       }).join("");
+      const bmiByIndex = new Map(bmiPoints.map((p) => [p.idx, p.value]));
+      const weightLabels = weightPoints.map((p) => {
+        const x = xFor(p.idx);
+        const bmiValue = bmiByIndex.get(p.idx);
+        const yBase = Number.isFinite(bmiValue) ? yBmi(bmiValue) + 22 : yWeight(p.value) - 10;
+        const y = Math.min(h - padB - 8, Math.max(padT + 12, yBase));
+        return `<text class="weight-value-label" x="${x.toFixed(1)}" y="${y.toFixed(1)}">${this._fmtNum(p.value, 1)}kg</text>`;
+      }).join("");
 
       return `
         <div class="chart-card">
@@ -484,6 +492,7 @@
               ${bars}
               ${bmiPoints.length > 1 ? `<polyline class="series bmi" points="${lineBmi}"></polyline>` : ""}
               ${bmiStateLabels}
+              ${weightLabels}
               <text class="date" x="${padL}" y="${h - 10}">${this._fmtShortDate(first.measured_at)}</text>
               <text class="date end" x="${w - padR}" y="${h - 10}">${this._fmtShortDate(last.measured_at)}</text>
             </svg>
@@ -1530,6 +1539,7 @@
           .point { stroke:rgba(255,255,255,.9); stroke-width:1.8; vector-effect:non-scaling-stroke; }
           .point.bmi { fill:var(--ssb-bmi-line); }
           .bmi-state-label { fill:var(--ssb-bmi-line); font-size:12px; font-weight:950; text-anchor:middle; paint-order:stroke; stroke:rgba(0,0,0,.45); stroke-width:3px; stroke-linejoin:round; vector-effect:non-scaling-stroke; }
+          .weight-value-label { fill:var(--ssb-weight-line); font-size:11px; font-weight:950; text-anchor:middle; paint-order:stroke; stroke:rgba(0,0,0,.50); stroke-width:3px; stroke-linejoin:round; vector-effect:non-scaling-stroke; }
           .tick, .date { fill:var(--ssb-text-secondary); font-size:12px; font-weight:750; }
           .weight-axis { text-anchor:start; fill:var(--ssb-weight-line); }
           .bmi-axis { text-anchor:end; fill:var(--ssb-bmi-line); }
