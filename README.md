@@ -29,4 +29,4 @@
 - Tham khảo tại đây [Automation](https://github.com/khaisilk1910/smart_scale_bmi/blob/main/automation/Smart%20Scale%20-%20Thong%20bao%20BMI%20theo%20nguoi%20can.yaml)
 
 
-<img width="937" height="886" alt="image" src="https://github.com/user-attachments/assets/90cc6a19-ef54-4290-83ef-8a8e105d8d88" />
+<img width="522" height="801" alt="image" src="https://github.com/user-attachments/assets/757e5f47-7646-4368-a2a2-87023c16f9cb" />
