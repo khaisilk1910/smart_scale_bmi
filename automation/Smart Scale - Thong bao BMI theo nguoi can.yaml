@@ -7,19 +7,17 @@ triggers:
     to: null
 conditions:
   - condition: template
+    alias: Chỉ chạy khi weight là số hợp lệ
     value_template: |
       {{ trigger.to_state.state | float(none) is not none }}
-  - condition: template
-    value_template: |
-      {{ states('sensor.smart_scale_s200_9a6a_profile_id') | int(0) > 0 }}
 actions:
   - delay: "00:00:05"
   - variables:
-      weight_now: "{{ states('sensor.smart_scale_s200_9a6a_weight') | float }}"
-      profile_id: "{{ states('sensor.smart_scale_s200_9a6a_profile_id') | int }}"
+      weight_now: "{{ states('sensor.smart_scale_s200_9a6a_weight') | float(0) }}"
+      profile_id: "{{ states('sensor.smart_scale_s200_9a6a_profile_id') | int(0) }}"
       known_profile: "{{ profile_id in [1, 2, 3, 4] }}"
       person_name: >
-        {% set names = {1:'Khải', 2:'Chíp', 3:'Sóc', 4:'Nhung'} %} {{
+        {% set names = { 1: 'Khải', 2: 'Chíp', 3: 'Sóc', 4: 'Nhung' } %}{{
         names.get(profile_id, 'Không rõ') }}
       bmi_sensor: |
         {% set sensors = {
@@ -28,56 +26,152 @@ actions:
           3: 'sensor.smart_scale_bmi_phuoc_phuoc_bmi',
           4: 'sensor.smart_scale_bmi_nhung_nhung_bmi'
         } %} {{ sensors.get(profile_id, '') }}
-      bmi: "{{ state_attr(bmi_sensor, 'bmi') | float(0) }}"
-      warning: "{{ state_attr(bmi_sensor, 'warning') | default('không rõ') }}"
-      recent: "{{ state_attr(bmi_sensor, 'recent_measurements') | default([]) }}"
-      weight_previous: |
-        {% if known_profile and recent | count >= 2 %}
-          {{ recent[1].weight_kg | float }}
+      bmi: "{{ state_attr(bmi_sensor | trim, 'bmi') | float(0) }}"
+      warning: >-
+        {{ state_attr(bmi_sensor | trim, 'warning') | default('không rõ', true)
+        }}
+      weight_standard_delta: >-
+        {{ state_attr(bmi_sensor | trim, 'weight_standard_delta') |
+        default(none, true) }}
+      recent: >-
+        {{ state_attr(bmi_sensor | trim, 'recent_measurements') | default([],
+        true) }}
+      latest_measurement: |
+        {% if known_profile and recent | count > 0 %}
+          {{ recent[0] }}
         {% else %}
           {{ none }}
         {% endif %}
-      diff: |
-        {% if weight_previous not in [none, 'none', 'None'] %}
-          {{ (weight_now - (weight_previous | float)) | round(2) }}
+      measurement_time: >
+        {% set m = latest_measurement %} {% if known_profile and m not in [none,
+        'none', 'None', '', 'unknown', 'unavailable'] %}
+          {{ m.time
+             | default(m.timestamp
+             | default(m.datetime
+             | default(m.date
+             | default(m.measured_at
+             | default(m.measurement_time
+             | default(m.local_time
+             | default(''))))))) }}
+        {% else %}
+          {{ '' }}
+        {% endif %}
+      notify_signature: "{{ profile_id }}|{{ weight_now }}|{{ measurement_time }}"
+      last_notify_signature: "{{ states('input_text.smart_scale_last_notify_signature') }}"
+      weight_previous: |
+        {% if known_profile and recent | count >= 2 %}
+          {{ recent[1].weight_kg | float(0) }}
+        {% else %}
+          {{ none }}
+        {% endif %}
+      diff: >
+        {% if weight_previous not in [none, 'none', 'None', '', 'unknown',
+        'unavailable'] %}
+          {{ (weight_now - (weight_previous | float(0))) | round(2) }}
         {% else %}
           {{ none }}
         {% endif %}
       change_text: |
-        {% if diff in [none, 'none', 'None'] %}
+        {% if diff in [none, 'none', 'None', '', 'unknown', 'unavailable'] %}
           Chưa có dữ liệu lần cân trước.
         {% elif diff | float > 0 %}
-          Tăng {{ diff | float | abs }} kg so với lần trước.
+          Tăng {{ diff | float | abs | round(2) }} kg so với lần trước.
         {% elif diff | float < 0 %}
-          Giảm {{ diff | float | abs }} kg so với lần trước.
+          Giảm {{ diff | float | abs | round(2) }} kg so với lần trước.
         {% else %}
           Cân nặng không thay đổi so với lần trước.
         {% endif %}
+      change_icon: |
+        {% if diff in [none, 'none', 'None', '', 'unknown', 'unavailable'] %}
+          ℹ️
+        {% elif diff | float > 0 %}
+          📈
+        {% elif diff | float < 0 %}
+          📉
+        {% else %}
+          ➖
+        {% endif %}
       title_text: |
         {% if known_profile %}
-          Smart Scale - {{ person_name }}
+          ⚖️ Smart Scale - {{ person_name }}
         {% else %}
-          Smart Scale - ID {{ profile_id }}
+          ⚖️ Smart Scale - ID {{ profile_id }}
         {% endif %}
-      message: >
-        {% if not known_profile %} Có người vừa cân nhưng profile_id {{
-        profile_id }} chưa được khai báo.
+      message_zalo: >
+        {% if not known_profile %}
 
-        Cân nặng: {{ weight_now }} kg {% else %} {{ person_name }} vừa cân.
+        ⚖️ Có người vừa cân
 
-        Cân nặng hiện tại: {{ weight_now }} kg {% if weight_previous not in
-        [none, 'none', 'None'] %} Cân nặng lần trước: {{ weight_previous }} kg
-        {{ change_text }} {% else %} {{ change_text }} {% endif %}
 
-        BMI: {{ bmi }} Cảnh báo: {{ warning }} {% endif %}
+        ⚠️ Profile ID {{ profile_id }} chưa được khai báo.
+
+        📌 Cân nặng: {{ weight_now | round(2) }} kg
+
+        {% else %}
+
+        ⚖️ {{ person_name }} vừa cân
+
+
+        📌 Cân nặng hiện tại: {{ weight_now | round(2) }} kg
+
+        {% if weight_previous not in [none, 'none', 'None', '', 'unknown',
+        'unavailable'] %}
+
+        🕘 Cân nặng lần trước: {{ weight_previous | float(0) | round(2) }} kg
+
+        {{ change_icon }} {{ change_text | trim }}
+
+        {% else %}
+
+        ℹ️ {{ change_text | trim }}
+
+        {% endif %}
+
+
+        📊 BMI: {{ bmi | round(2) }}
+
+        ✅ Cảnh báo: {{ warning }}
+
+        {% if weight_standard_delta not in [none, 'none', 'None', '', 'unknown',
+        'unavailable'] %}
+
+        🎯 Chênh lệch chuẩn cân nặng: {{ weight_standard_delta }}
+
+        {% endif %}
+
+        {% endif %}
+      message_tts: |
+        {% if not known_profile %}
+          Có người vừa cân, nhưng mã hồ sơ {{ profile_id }} chưa được khai báo.
+          Cân nặng là {{ weight_now | round(2) }} kilôgam.
+        {% else %}
+          {{ person_name }} vừa cân.
+          Cân nặng hiện tại là {{ weight_now | round(2) }} kilôgam.
+          {% if weight_previous not in [none, 'none', 'None', '', 'unknown', 'unavailable'] %}
+            Lần trước là {{ weight_previous | float(0) | round(2) }} kilôgam.
+            {{ change_text | trim | replace('kg', 'kilôgam') }}
+          {% else %}
+            {{ change_text | trim | replace('kg', 'kilôgam') }}
+          {% endif %}
+          Chỉ số BMI là {{ bmi | round(2) }}.
+          Cảnh báo {{ warning }}.
+        {% endif %}
+  - condition: template
+    alias: Chỉ tiếp tục khi profile_id hợp lệ
+    value_template: |
+      {{ profile_id > 0 }}
+  - condition: template
+    alias: Chỉ thông báo khi là lần cân mới, không báo lại state cũ được restore
+    value_template: |
+      {{ (notify_signature | trim) != (last_notify_signature | trim) }}
   - action: tts.speak
     metadata: {}
     target:
-      entity_id: tts.edge_tts
+      entity_id: tts.google_vi_com_vn
     data:
       cache: false
       media_player_entity_id: media_player.phong_ngu_speaker
-      message: "{{ message }}"
+      message: "{{ message_tts | trim }}"
   - action: zalo_bot.send_message
     metadata: {}
     data:
@@ -85,5 +179,13 @@ actions:
       ttl: 0
       account_selection: "+84376861184"
       thread_id: "5899152865459783083"
-      message: "{{ title_text }}. {{ message }}"
+      message: |-
+        {{ title_text | trim }}
+
+        {{ message_zalo }}
+  - action: input_text.set_value
+    target:
+      entity_id: input_text.smart_scale_last_notify_signature
+    data:
+      value: "{{ notify_signature }}"
 mode: restart
