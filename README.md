@@ -25,6 +25,7 @@
 
 # Automation thông báo
 - Thông báo ra loa và gửi tin nhắn Zalo(cần cài tích hợp Zalo)
+- Lưu ý: sửa các `bmi_sensor` `person_name` `sensor` trong Automation để đúng theo số lượng người cân và tên bạn muốn
 - Tham khảo tại đây [Automation](https://github.com/khaisilk1910/smart_scale_bmi/blob/main/automation/Smart%20Scale%20-%20Thong%20bao%20BMI%20theo%20nguoi%20can.yaml)
 
 
