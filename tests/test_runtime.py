@@ -9,6 +9,9 @@ import asyncio
 from datetime import datetime, timezone
 import importlib.util
 import math
+import sqlite3
+import threading
+import time
 import sys
 import types
 from pathlib import Path
@@ -150,7 +153,7 @@ def make_runtime(monkeypatch, hass):
     fake_module("homeassistant.helpers.event", async_track_state_change_event=listen_state,
                 async_call_later=call_later)
     async def integration(*_):
-        return SimpleNamespace(version="2026.11.0")
+        return SimpleNamespace(version="2026.11.1")
     fake_module("homeassistant.loader", async_get_integration=integration)
     fake_module("homeassistant.util")
     fake_module("homeassistant.util.dt", utcnow=lambda: datetime.now(timezone.utc),
@@ -250,3 +253,74 @@ def test_background_startup_and_recording(monkeypatch, tmp_path):
         assert await runtime.async_unload_entry(h, e)
         assert e.entry_id not in h.data["smart_scale_bmi"]
     asyncio.run(scenario())
+
+
+def test_multiple_entries_initialize_one_shared_database(monkeypatch, tmp_path):
+    """An HA process with many configured persons must migrate exactly once."""
+    async def scenario():
+        h = FakeHass(tmp_path)
+        runtime = make_runtime(monkeypatch, h)
+        real_init = runtime.init_db
+        init_calls = 0
+        calls_guard = threading.Lock()
+
+        def monitored_init(db_path):
+            nonlocal init_calls
+            with calls_guard:
+                init_calls += 1
+            time.sleep(0.04)  # Force overlap if initialization is not shared.
+            real_init(db_path)
+
+        monkeypatch.setattr(runtime, "init_db", monitored_init)
+        entries = []
+        for index in range(12):
+            entry = FakeEntry()
+            entry.entry_id = f"person-{index}"
+            entry.data = profile(name=f"Person {index}", profile_id=index + 1)
+            entries.append(entry)
+        assert all(await asyncio.gather(*(runtime.async_setup_entry(h, e) for e in entries)))
+        await asyncio.wait_for(
+            asyncio.gather(*(h.data["smart_scale_bmi"][e.entry_id]["storage_task"] for e in entries)),
+            timeout=10,
+        )
+        assert init_calls == 1
+        assert all(h.data["smart_scale_bmi"][e.entry_id]["storage_ready"] for e in entries)
+        path = h.data["smart_scale_bmi"][entries[0].entry_id]["db_path"]
+        for entry in entries:
+            assert database.get_person(path, entry.entry_id) is not None
+        assert await runtime.async_unload_entry(h, entries[0])
+        # An unload/reload also must not rerun journal_mode or migrations.
+        assert await runtime.async_setup_entry(h, entries[0])
+        await h.data["smart_scale_bmi"][entries[0].entry_id]["storage_task"]
+        assert init_calls == 1
+
+    asyncio.run(scenario())
+
+
+def test_sqlite_busy_warning_and_retry(monkeypatch, tmp_path, caplog):
+    """Transient lock warning should recover without a noisy traceback."""
+    async def scenario():
+        h = FakeHass(tmp_path)
+        runtime = make_runtime(monkeypatch, h)
+        real_init = runtime.init_db
+        calls = 0
+
+        def flaky_init(db_path):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise sqlite3.OperationalError("database is locked")
+            real_init(db_path)
+
+        monkeypatch.setattr(runtime, "init_db", flaky_init)
+        monkeypatch.setattr(runtime, "_STORAGE_RETRY_SECONDS", 0.01)
+        entry = FakeEntry()
+        assert await runtime.async_setup_entry(h, entry)
+        await asyncio.wait_for(h.data["smart_scale_bmi"][entry.entry_id]["storage_task"], timeout=5)
+        assert calls == 2
+        assert h.data["smart_scale_bmi"][entry.entry_id]["storage_ready"]
+        assert h.data["smart_scale_bmi"][entry.entry_id]["last_error"] is None
+
+    asyncio.run(scenario())
+    assert "SQLite temporarily busy during background initialization" in caplog.text
+    assert "SQLite initialization failed" not in caplog.text

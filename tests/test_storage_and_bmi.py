@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 from datetime import date
+from concurrent.futures import ThreadPoolExecutor
+import threading
+import time
 from types import SimpleNamespace
 import sqlite3
 import pytest
@@ -154,3 +157,109 @@ def test_upgrade_preserves_existing_sqlite_data(tmp_path):
     database.upsert_person(str(path), "entry1", {**conf, "person_name": "Updated"})
     assert database.get_measurement(str(path), "entry1", legacy_id)["weight_kg"] == 65
     assert database.count_measurements(str(path), "entry1") == 1
+
+
+def test_wal_enabled_only_once_and_persists(tmp_path, monkeypatch):
+    """On reload an already-WAL database must not be converted again."""
+    path = tmp_path / "persistent.sqlite"
+    traced = []
+    original_connect = database.sqlite3.connect
+
+    def monitored_connect(*args, **kwargs):
+        conn = original_connect(*args, **kwargs)
+        conn.set_trace_callback(traced.append)
+        return conn
+
+    monkeypatch.setattr(database.sqlite3, "connect", monitored_connect)
+    database.init_db(str(path))
+    database.init_db(str(path))
+    statements = [sql.strip().lower() for sql in traced]
+    assert statements.count("pragma journal_mode=wal") == 1
+
+
+def test_parallel_init_db_serializes_schema_work(tmp_path, monkeypatch):
+    """Thread-level lock remains effective even across cancelled async jobs."""
+    path = tmp_path / "parallel.sqlite"
+    original = database._init_db_locked
+    active = 0
+    peak = 0
+    guard = threading.Lock()
+
+    def monitored(db_path):
+        nonlocal active, peak
+        with guard:
+            active += 1
+            peak = max(peak, active)
+        try:
+            time.sleep(0.02)
+            original(db_path)
+        finally:
+            with guard:
+                active -= 1
+
+    monkeypatch.setattr(database, "_init_db_locked", monitored)
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        list(executor.map(database.init_db, [str(path)] * 8))
+    assert peak == 1
+    assert database.count_measurements(str(path), "unused") == 0
+
+
+def test_external_exclusive_lock_can_clear_before_timeout(tmp_path):
+    """An external SQLite writer can temporarily own a DELETE-mode DB."""
+    path = tmp_path / "externally_locked.sqlite"
+    with sqlite3.connect(path) as conn:
+        conn.execute("CREATE TABLE legacy (id INTEGER)")
+    external = sqlite3.connect(path, timeout=1, isolation_level=None)
+    try:
+        external.execute("BEGIN EXCLUSIVE")
+        started = threading.Event()
+        finished = threading.Event()
+        errors = []
+
+        def worker():
+            started.set()
+            try:
+                database.init_db(str(path))
+            except Exception as err:
+                errors.append(err)
+            finally:
+                finished.set()
+
+        thread = threading.Thread(target=worker)
+        thread.start()
+        assert started.wait(timeout=2)
+        assert not finished.wait(timeout=0.1)
+        external.execute("COMMIT")
+        thread.join(timeout=5)
+        assert not thread.is_alive()
+        assert not errors
+        with sqlite3.connect(path) as conn:
+            assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+    finally:
+        external.close()
+
+
+def test_concurrent_profile_writes_remain_consistent(tmp_path):
+    """Multiple worker threads writing different profiles do not lose records."""
+    path = tmp_path / "writers.sqlite"
+    database.init_db(str(path))
+    config_by_person = {}
+    for number in range(8):
+        person = f"entry-{number}"
+        conf = profile(f"Person {number}", number + 1)
+        config_by_person[person] = conf
+        database.upsert_person(str(path), person, conf)
+
+    def write(item):
+        person, number = item
+        conf = config_by_person[person]
+        return insert(path, person, conf, f"2026-11-07T12:{number:02d}:00+00:00")
+
+    items = [(person, number) for person in config_by_person for number in range(15)]
+    with ThreadPoolExecutor(max_workers=12) as executor:
+        results = list(executor.map(write, items))
+    assert len(set(results)) == len(items)
+    for person in config_by_person:
+        assert database.count_measurements(str(path), person) == 15
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"

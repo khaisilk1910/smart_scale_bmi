@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import sqlite3
 from datetime import datetime, timezone
 from functools import partial
 from pathlib import Path
@@ -52,6 +53,18 @@ _LOGGER = logging.getLogger(__name__)
 UI_URL_BASE = "/smart_scale_bmi_ui"
 CARD_FILE = "smart-scale-bmi-card.js"
 SOURCE_PAIR_WINDOW_SECONDS = 120
+_STORAGE_COORDINATOR_KEY = f"{DOMAIN}_sqlite_coordinator"
+_STORAGE_ATTEMPTS = 3
+_STORAGE_RETRY_SECONDS = 5
+
+
+def _is_sqlite_busy(err: Exception) -> bool:
+    """Only classify busy/locked SQLite failures as transient contention."""
+    return isinstance(err, sqlite3.OperationalError) and (
+        getattr(err, "sqlite_errorcode", None) in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED)
+        or "locked" in str(err).lower()
+        or "busy" in str(err).lower()
+    )
 
 
 def _valid_weight(value: Any) -> float:
@@ -238,7 +251,7 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
             await init_resource(
                 hass,
                 f"{UI_URL_BASE}/{CARD_FILE}",
-                str(integration.version or "2026.11.0"),
+                str(integration.version or "2026.11.1"),
             )
         except Exception:
             _LOGGER.exception("Cannot register Smart Scale BMI dashboard card resource")
@@ -359,15 +372,30 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     }
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = runtime
 
+    # Every configured person points to the same database. A shared async lock
+    # prevents parallel WAL mode switches, migrations and profile upserts.
+    # Keep this coordinator for the entire HA process (not per entry), so a
+    # reload does not trigger another schema migration.
+    db_coordinator = hass.data.setdefault(
+        _STORAGE_COORDINATOR_KEY,
+        {"lock": asyncio.Lock(), "initialized": False, "db_path": db_path},
+    )
+
     async def _prepare_storage() -> None:
-        """Run all synchronous SQLite work on executor threads, never HA's event loop."""
-        for attempt in range(1, 4):
+        """Initialize and upsert off-loop; never delay HA config entry setup."""
+        for attempt in range(1, _STORAGE_ATTEMPTS + 1):
             if runtime["unloading"]:
                 return
             try:
                 config_data = get_config(entry)
-                await hass.async_add_executor_job(init_db, db_path)
-                await hass.async_add_executor_job(upsert_person, db_path, entry.entry_id, config_data)
+                async with db_coordinator["lock"]:
+                    if not db_coordinator["initialized"]:
+                        await hass.async_add_executor_job(init_db, db_path)
+                        db_coordinator["initialized"] = True
+                        _LOGGER.debug("SQLite schema ready: shared database initialized once")
+                    await hass.async_add_executor_job(
+                        upsert_person, db_path, entry.entry_id, config_data
+                    )
                 initial = float(config_data.get(CONF_INITIAL_WEIGHT_KG, 0) or 0)
                 if 1 <= initial <= 300:
                     async with runtime["record_lock"]:
@@ -391,7 +419,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                                     **payload,
                                 )
                             )
-                            _LOGGER.info("Initial weight saved entry=%s (user-configured value)", entry.entry_id)
+                            _LOGGER.info(
+                                "Initial weight saved entry=%s (user-configured value)",
+                                entry.entry_id,
+                            )
+                if runtime["unloading"]:
+                    return
                 runtime["storage_ready"] = True
                 runtime["last_error"] = None
                 _LOGGER.debug("SQLite ready for entry %s", entry.entry_id)
@@ -401,12 +434,26 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 raise
             except Exception as err:
                 runtime["last_error"] = type(err).__name__
-                _LOGGER.exception(
-                    "SQLite initialization failed entry=%s attempt=%s/3", entry.entry_id, attempt
-                )
-                if attempt < 3:
-                    await asyncio.sleep(5)
-        _LOGGER.error("SQLite unavailable for entry %s; reload integration after fixing the error", entry.entry_id)
+                if _is_sqlite_busy(err) and attempt < _STORAGE_ATTEMPTS:
+                    _LOGGER.warning(
+                        "SQLite temporarily busy during background initialization "
+                        "entry=%s attempt=%s/%s; retrying in %ss: %s",
+                        entry.entry_id, attempt, _STORAGE_ATTEMPTS,
+                        _STORAGE_RETRY_SECONDS, err,
+                    )
+                else:
+                    _LOGGER.exception(
+                        "SQLite initialization failed entry=%s attempt=%s/%s",
+                        entry.entry_id, attempt, _STORAGE_ATTEMPTS,
+                    )
+                if attempt < _STORAGE_ATTEMPTS:
+                    await asyncio.sleep(_STORAGE_RETRY_SECONDS)
+        _LOGGER.error(
+            "SQLite unavailable for entry %s; verify the database file is on "
+            "local storage, no other process holds a long lock, and reload "
+            "the integration after resolving the issue",
+            entry.entry_id,
+        )
 
     runtime["storage_task"] = entry.async_create_background_task(
         hass, _prepare_storage(), f"{DOMAIN} database {entry.entry_id}", eager_start=False

@@ -1,7 +1,7 @@
 (function () {
   "use strict";
 
-  const CARD_VERSION = "2026.11.0";
+  const CARD_VERSION = "2026.11.1";
 
   const GRADIENTS = [
     { value: "linear-gradient(135deg, #0f2027, #203a43, #2c5364)", label: "Ocean Night" },

@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
 from datetime import datetime
+from functools import wraps
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, ParamSpec, TypeVar
 
 from homeassistant.config_entries import ConfigEntry
 
@@ -21,18 +23,56 @@ from .const import (
 )
 
 
+# A single scale database is shared across people and executor threads. SQLite
+# allows just one writer at a time. Serialize our writes (not reads), including
+# schema migrations, even when an entry task is cancelled during an executor job.
+_WRITE_LOCK = threading.RLock()
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
+
+
+def _serialized_write(func: Callable[_P, _R]) -> Callable[_P, _R]:
+    """Avoid SQLite writer contention between different configured people."""
+    @wraps(func)
+    def wrapped(*args: _P.args, **kwargs: _P.kwargs) -> _R:
+        with _WRITE_LOCK:
+            return func(*args, **kwargs)
+
+    return wrapped
+
+
 def get_config(entry: ConfigEntry) -> dict[str, Any]:
     """Merge immutable entry data and editable options."""
     return {**entry.data, **entry.options}
 
 
 def init_db(db_path: str) -> None:
-    """Create or migrate the SQLite database."""
+    """Create or migrate SQLite once, with safe WAL activation.
+
+    WAL is persistent. Repeatedly setting it requires unnecessary database
+    locks, especially when several profiles share this one database file.
+    This function runs only on the Home Assistant executor, never its loop.
+    """
+    with _WRITE_LOCK:
+        _init_db_locked(db_path)
+
+
+def _init_db_locked(db_path: str) -> None:
+    """Do the actual migration under the cross-thread schema lock."""
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path, timeout=15)
     try:
         cur = conn.cursor()
-        cur.execute("PRAGMA journal_mode=WAL")
+        # Activating WAL takes a database-wide lock. Do it only for databases
+        # that have not already been converted (the setting survives restart).
+        current_mode = str(cur.execute("PRAGMA journal_mode").fetchone()[0]).lower()
+        if current_mode != "wal":
+            new_mode = str(cur.execute("PRAGMA journal_mode=WAL").fetchone()[0]).lower()
+            if new_mode != "wal":
+                raise sqlite3.OperationalError(
+                    f"SQLite could not enable WAL (journal_mode={new_mode}); "
+                    "check local filesystem and permissions"
+                )
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS people (
@@ -97,6 +137,7 @@ def init_db(db_path: str) -> None:
         conn.close()
 
 
+@_serialized_write
 def upsert_person(db_path: str, entry_id: str, config: dict[str, Any]) -> None:
     """Insert or update the configured person."""
     now = datetime.now().isoformat(timespec="seconds")
@@ -156,6 +197,7 @@ def count_measurements(db_path: str, entry_id: str) -> int:
         conn.close()
 
 
+@_serialized_write
 def insert_measurement(
     db_path: str,
     *,
@@ -219,6 +261,7 @@ def insert_measurement(
         conn.close()
 
 
+@_serialized_write
 def delete_measurement(db_path: str, entry_id: str, measurement_id: int) -> bool:
     """Delete a measurement for a specific entry."""
     conn = sqlite3.connect(db_path, timeout=15)
@@ -249,6 +292,7 @@ def get_measurement(db_path: str, entry_id: str, measurement_id: int) -> dict[st
         conn.close()
 
 
+@_serialized_write
 def update_measurement(
     db_path: str,
     *,

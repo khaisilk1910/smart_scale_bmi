@@ -11,7 +11,7 @@ def test_marketplace_manifest():
     metadata = json.loads((ROOT / "hacs.json").read_text())
     manifest = json.loads((COMPONENT / "manifest.json").read_text())
     assert metadata["homeassistant"] == "2026.11.0"
-    assert manifest["version"] == "2026.11.0"
+    assert manifest["version"] == "2026.11.1"
     assert manifest["domain"] == COMPONENT.name
     assert manifest["integration_type"] == "helper"
     assert manifest["iot_class"] == "calculated"
