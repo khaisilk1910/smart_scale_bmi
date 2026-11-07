@@ -1,6 +1,4 @@
 {
   "name": "Smart Scale BMI",
-  "render_readme": true,
-  "iot_class": "calculated",
-  "zip_release": false
+  "homeassistant": "2026.11.0"
 }

@@ -1,7 +1,7 @@
 (function () {
   "use strict";
 
-  const CARD_VERSION = "2026.06.10-weight-labels-v23";
+  const CARD_VERSION = "2026.11.0";
 
   const GRADIENTS = [
     { value: "linear-gradient(135deg, #0f2027, #203a43, #2c5364)", label: "Ocean Night" },
@@ -199,8 +199,11 @@
 
   function normalizeConfig(config) {
     const out = { ...DEFAULT_CONFIG, ...(config || {}) };
-    out.hidden_entities = Array.isArray(out.hidden_entities) ? out.hidden_entities : [];
-    out.max_records = clampNumber(out.max_records, 1, 365, DEFAULT_CONFIG.max_records);
+    out.hidden_entities = Array.isArray(out.hidden_entities) ? out.hidden_entities.filter((id) => typeof id === "string") : [];
+    out.entities = Array.isArray(out.entities)
+      ? out.entities.filter((item) => typeof item === "string" || (item && typeof item.entity === "string"))
+      : (typeof out.entities === "string" ? out.entities.split(",").map((id) => id.trim()).filter(Boolean) : []);
+    out.max_records = clampNumber(out.max_records, 1, 60, DEFAULT_CONFIG.max_records);
     out.chart_height = clampNumber(out.chart_height, 180, 420, DEFAULT_CONFIG.chart_height);
     out.bg_opacity = clampNumber(out.bg_opacity, 0, 100, DEFAULT_CONFIG.bg_opacity);
     out.content_bg_opacity = clampNumber(out.content_bg_opacity, 0, 100, DEFAULT_CONFIG.content_bg_opacity);
@@ -226,13 +229,17 @@
   }
 
   class SmartScaleBmiCard extends HTMLElement {
+    constructor() {
+      super();
+      this.attachShadow({ mode: "open" });
+    }
+
     static getConfigElement() {
       return document.createElement("smart-scale-bmi-card-editor");
     }
 
     static getStubConfig() {
       return {
-        type: "custom:smart-scale-bmi-card",
         auto_entities: true,
         max_records: 60,
         show_charts: true,
@@ -242,7 +249,12 @@
     }
 
     setConfig(config) {
+      if (!config || typeof config !== "object" || Array.isArray(config)) {
+        throw new Error("Smart Scale BMI: invalid card configuration");
+      }
       this._config = normalizeConfig(config);
+      this._autoEntityCache = null;
+      this._autoEntityCacheUntil = 0;
       this._lastRenderSignature = undefined;
       this._render();
     }
@@ -257,16 +269,28 @@
     }
 
     getCardSize() {
-      return 8;
+      const height = this.shadowRoot?.querySelector("ha-card")?.scrollHeight || 400;
+      return Math.max(3, Math.ceil(height / 50));
+    }
+
+    getGridOptions() {
+      return { columns: 12, min_columns: 6, rows: "auto" };
     }
 
     _getEntities() {
       const cfg = this._config || DEFAULT_CONFIG;
       if (cfg.auto_entities !== false && this._hass) {
         const hidden = new Set(Array.isArray(cfg.hidden_entities) ? cfg.hidden_entities : []);
-        return discoverSmartScaleEntities(this._hass).filter((item) => !hidden.has(item.entity));
+        // Home Assistant may update hass on every state event. Avoid a full
+        // states scan for every single sensor, light or timer change.
+        const now = Date.now();
+        if (!this._autoEntityCache || now >= this._autoEntityCacheUntil) {
+          this._autoEntityCache = discoverSmartScaleEntities(this._hass);
+          this._autoEntityCacheUntil = now + 5000;
+        }
+        return this._autoEntityCache.filter((item) => !hidden.has(item.entity));
       }
-      if (cfg.entities) {
+      if (Array.isArray(cfg.entities) && cfg.entities.length) {
         return cfg.entities.map((item) => (typeof item === "string" ? { entity: item } : item));
       }
       if (cfg.entity) return [{ entity: cfg.entity, name: cfg.name }];
@@ -546,7 +570,8 @@
         return true;
       } catch (err) {
         console.error(`Smart Scale BMI: không gọi được service ${service}`, err);
-        this._setDialogError(`Không gọi được service ${service}. Hãy kiểm tra log Home Assistant.`);
+        const reason = String(err?.message || err || "").slice(0, 180);
+        this._setDialogError(`Không thể ${service}: ${reason || "Kiểm tra log Home Assistant"}`);
         return false;
       }
     }
@@ -680,7 +705,7 @@
       let service = "add_measurement";
       const payload = { entry_id: entryId };
       if (mode === "delete") {
-        if (!Number.isFinite(measurementId)) {
+        if (!Number.isSafeInteger(measurementId) || measurementId < 1) {
           this._setDialogError("Không tìm thấy measurement_id để xóa.");
           return;
         }
@@ -688,13 +713,13 @@
         payload.measurement_id = measurementId;
       } else {
         const weightKg = Number(weightRaw);
-        if (!Number.isFinite(weightKg) || weightKg <= 0) {
+        if (!Number.isFinite(weightKg) || weightKg < 1 || weightKg > 300) {
           this._setDialogError("Cân nặng không hợp lệ.", { entry_id: entryId, weight_kg: weightRaw });
           return;
         }
         payload.weight_kg = weightKg;
         if (mode === "edit") {
-          if (!Number.isFinite(measurementId)) {
+          if (!Number.isSafeInteger(measurementId) || measurementId < 1) {
             this._setDialogError("Không tìm thấy measurement_id để sửa.", { entry_id: entryId, weight_kg: weightRaw });
             return;
           }
@@ -847,7 +872,7 @@
         ? `<button class="ssb-add-fab" type="button" data-action="open-add" title="Thêm record" aria-label="Thêm record" data-tooltip="Thêm record" ${canAddRecord ? "" : "disabled"}>+</button>`
         : "";
 
-      this.innerHTML = `
+      this.shadowRoot.innerHTML = `
         <div class="ssb-root" style="${this._styleVars()}">
           <ha-card>
             <div class="card-content">
@@ -1829,7 +1854,7 @@
         </style>
       `;
 
-      this.querySelectorAll(".tab-btn[data-entity]").forEach((btn) => {
+      this.shadowRoot.querySelectorAll(".tab-btn[data-entity]").forEach((btn) => {
         btn.addEventListener("click", () => {
           this._activeEntity = btn.getAttribute("data-entity");
           this._lastRenderSignature = undefined;
@@ -1837,7 +1862,7 @@
         });
       });
 
-      this.querySelectorAll('[data-action="open-add"]').forEach((btn) => {
+      this.shadowRoot.querySelectorAll('[data-action="open-add"]').forEach((btn) => {
         btn.addEventListener("click", (ev) => {
           ev.preventDefault();
           ev.stopPropagation();
@@ -1845,7 +1870,7 @@
         });
       });
 
-      this.querySelectorAll(".record-btn[data-action]").forEach((btn) => {
+      this.shadowRoot.querySelectorAll(".record-btn[data-action]").forEach((btn) => {
         btn.addEventListener("click", (ev) => {
           ev.preventDefault();
           ev.stopPropagation();
@@ -1855,7 +1880,7 @@
         });
       });
 
-      this.querySelectorAll("[data-dialog-action='cancel']").forEach((el) => {
+      this.shadowRoot.querySelectorAll("[data-dialog-action='cancel']").forEach((el) => {
         el.addEventListener("click", (ev) => {
           if (ev.currentTarget.classList.contains("ssb-dialog-backdrop") && ev.target !== ev.currentTarget) return;
           ev.preventDefault();
@@ -1864,8 +1889,14 @@
         });
       });
 
-      const dialogForm = this.querySelector("[data-dialog-form]");
+      const dialogForm = this.shadowRoot.querySelector("[data-dialog-form]");
       if (dialogForm) {
+        dialogForm.addEventListener("keydown", (ev) => {
+          if (ev.key === "Escape" && !this._dialog?.busy) {
+            ev.preventDefault();
+            this._closeDialog();
+          }
+        });
         dialogForm.addEventListener("click", (ev) => ev.stopPropagation());
         dialogForm.addEventListener("submit", (ev) => {
           ev.preventDefault();
@@ -1874,11 +1905,23 @@
         });
       }
 
+      if (dialogForm && !this._dialog?.busy) {
+        dialogForm.querySelector('input[name="weight_kg"], button[type="submit"]')?.focus({ preventScroll: true });
+      }
       this._lastRenderSignature = precomputedSignature || this._renderSignature();
     }
   }
 
   class SmartScaleBmiCardEditor extends HTMLElement {
+    constructor() {
+      super();
+      this.attachShadow({ mode: "open" });
+    }
+
+    disconnectedCallback() {
+      window.clearTimeout(this._emitTimer);
+    }
+
     setConfig(config) {
       this._config = normalizeConfig(config);
       if (this._skipNextConfigRender) {
@@ -1907,6 +1950,9 @@
       if (newConfig.auto_entities !== false) {
         delete newConfig.entity;
         delete newConfig.entities;
+      } else {
+        delete newConfig.entity;
+        newConfig.entities = Array.isArray(newConfig.entities) ? newConfig.entities : [];
       }
       this._config = normalizeConfig(newConfig);
       this._skipNextConfigRender = true;
@@ -1930,7 +1976,7 @@
     }
 
     _readValue(id, type = "text") {
-      const el = this.querySelector(`#${id}`);
+      const el = this.shadowRoot.querySelector(`#${id}`);
       if (!el) return undefined;
       if (type === "checkbox") return el.checked;
       if (type === "number") return Number(el.value);
@@ -1940,6 +1986,7 @@
     _collectAndEmit() {
       const cfg = {
         auto_entities: this._readValue("auto_entities", "checkbox"),
+        entities: (this._readValue("manual_entities") || "").split(/[\n,;]+/).map((id) => id.trim()).filter(Boolean),
         max_records: this._readValue("max_records", "number"),
         show_header: this._readValue("show_header", "checkbox"),
         show_charts: this._readValue("show_charts", "checkbox"),
@@ -1979,7 +2026,7 @@
       };
 
       const hidden = [];
-      this.querySelectorAll("input[data-entity]").forEach((el) => {
+      this.shadowRoot.querySelectorAll("input[data-entity]").forEach((el) => {
         if (!el.checked) hidden.push(el.getAttribute("data-entity"));
       });
       cfg.hidden_entities = hidden;
@@ -2008,11 +2055,11 @@
       if (!this._config) this._config = normalizeConfig({});
       const c = this._config;
       const gradientOptions = GRADIENTS.map((g) => `<option value="${escapeAttr(g.value)}" ${c.bg_gradient_preset === g.value ? "selected" : ""}>${escapeHtml(g.label)}</option>`).join("");
-      this.innerHTML = `
+      this.shadowRoot.innerHTML = `
         <div class="editor">
           <div class="section">
             <div class="section-title">Nội dung</div>
-            <label class="row"><span>Số record tối đa</span><input id="max_records" type="number" min="1" max="365" value="${c.max_records}"></label>
+            <label class="row"><span>Số record tối đa</span><input id="max_records" type="number" min="1" max="60" value="${c.max_records}"></label>
             <label class="row"><span>Chiều cao biểu đồ</span><input id="chart_height" type="number" min="180" max="420" value="${c.chart_height}"></label>
             <div class="toggles">
               ${this._toggle("show_header", "Hiện header", c.show_header)}
@@ -2027,6 +2074,7 @@
           <details class="section fold-section">
             <summary class="section-title"><span>Entry Smart Scale BMI</span><span class="fold-arrow" aria-hidden="true">&#9662;</span></summary>
             ${this._toggle("auto_entities", "Tự quét entry của tích hợp", c.auto_entities)}
+            <label class="row"><span>Entity ID thủ công (khi tắt tự quét, cách nhau dấu phẩy)</span><input id="manual_entities" type="text" value="${escapeAttr((c.entities || []).map((item) => typeof item === "string" ? item : item.entity).join(", "))}" placeholder="sensor.person_bmi"></label>
             <div class="entity-list">${this._entityListHtml()}</div>
           </details>
 
@@ -2111,7 +2159,7 @@
       `;
 
       this._editorRendered = true;
-      this.querySelectorAll("input, select").forEach((el) => {
+      this.shadowRoot.querySelectorAll("input, select").forEach((el) => {
         el.addEventListener("change", () => {
           this._updateRangeLabel(el);
           this._collectAndEmit();
@@ -2146,5 +2194,5 @@
     });
   }
 
-  console.info(`%cSMART-SCALE-BMI-CARD ${CARD_VERSION}`, "color:#4facfe;font-weight:700;");
+  console.debug(`SMART-SCALE-BMI-CARD ${CARD_VERSION} loaded`);
 })();

@@ -1,30 +1,31 @@
-"""Smart Scale BMI integration."""
+"""Smart Scale BMI integration for Home Assistant."""
 from __future__ import annotations
 
-import hashlib
+import asyncio
 import logging
-import os
+import math
+from datetime import datetime, timezone
 from functools import partial
-from datetime import datetime
+from pathlib import Path
 from typing import Any
 
-import voluptuous as vol
+import probatio as vol
 
+from homeassistant.components.frontend import add_extra_js_url
+from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
 from homeassistant.core import CoreState, HomeAssistant, ServiceCall, callback
-from homeassistant.components.http import StaticPathConfig
-from homeassistant.components.frontend import add_extra_js_url
-from homeassistant.loader import async_get_integration
+from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.event import async_call_later, async_track_state_change_event
+from homeassistant.loader import async_get_integration
 import homeassistant.util.dt as dt_util
 
 from .const import (
     CONF_HEIGHT_M,
     CONF_INITIAL_WEIGHT_KG,
-    CONF_PERSON_NAME,
     CONF_PROFILE_ID,
     CONF_PROFILE_SENSOR,
     CONF_WEIGHT_SENSOR,
@@ -37,118 +38,126 @@ from .const import (
 )
 from .database import (
     count_measurements,
+    delete_measurement,
     get_config,
     get_measurement,
     init_db,
     insert_measurement,
-    upsert_person,
-    delete_measurement,
     update_measurement,
+    upsert_person,
 )
 from .who import calculate_bmi, classify_bmi
 
 _LOGGER = logging.getLogger(__name__)
-
 UI_URL_BASE = "/smart_scale_bmi_ui"
-UI_DIR_PATH = "frontend"
 CARD_FILE = "smart-scale-bmi-card.js"
+SOURCE_PAIR_WINDOW_SECONDS = 120
 
-SERVICE_ADD_MEASUREMENT = "add_measurement"
-SERVICE_DELETE_MEASUREMENT = "delete_measurement"
-SERVICE_UPDATE_MEASUREMENT = "update_measurement"
+
+def _valid_weight(value: Any) -> float:
+    """Reject invalid, nonfinite and physiologically implausible measurements."""
+    try:
+        weight = float(value)
+    except (TypeError, ValueError) as err:
+        raise vol.Invalid("Weight must be a number") from err
+    if not math.isfinite(weight) or not 1 <= weight <= 300:
+        raise vol.Invalid("Weight must be between 1 and 300 kg")
+    return weight
+
 
 SERVICE_ADD_MEASUREMENT_SCHEMA = vol.Schema(
     {
         vol.Required("entry_id"): cv.string,
-        vol.Required("weight_kg"): vol.Coerce(float),
+        vol.Required("weight_kg"): _valid_weight,
         vol.Optional("measured_at"): cv.string,
     }
 )
-
 SERVICE_DELETE_MEASUREMENT_SCHEMA = vol.Schema(
     {
         vol.Required("entry_id"): cv.string,
-        vol.Required("measurement_id"): vol.Coerce(int),
+        vol.Required("measurement_id"): vol.All(vol.Coerce(int), vol.Range(min=1)),
     }
 )
-
 SERVICE_UPDATE_MEASUREMENT_SCHEMA = vol.Schema(
     {
         vol.Required("entry_id"): cv.string,
-        vol.Required("measurement_id"): vol.Coerce(int),
-        vol.Required("weight_kg"): vol.Coerce(float),
+        vol.Required("measurement_id"): vol.All(vol.Coerce(int), vol.Range(min=1)),
+        vol.Required("weight_kg"): _valid_weight,
     }
 )
 
 
-async def init_resource(hass: HomeAssistant, url: str, ver: str) -> bool:
-    """Register the Lovelace custom card resource with safe cache busting.
-
-    Avoid registering the same JS twice via both add_extra_js_url and Lovelace
-    resources. Duplicate registration can make browsers keep a failed custom-card
-    load per origin/IP/domain until the cache is cleared.
-    """
-    url_with_version = f"{url}?v={ver}"
-
-    lovelace = hass.data.get("lovelace")
-    if not lovelace:
-        add_extra_js_url(hass, url_with_version)
-        return False
-
-    resources = getattr(lovelace, "resources", None)
-    if resources is None and hasattr(lovelace, "get"):
-        resources = lovelace.get("resources")
-
-    if not resources or not hasattr(resources, "async_items"):
-        add_extra_js_url(hass, url_with_version)
-        return False
-
-    if hasattr(resources, "async_get_info"):
-        await resources.async_get_info()
-    elif hasattr(resources, "async_load") and not getattr(resources, "loaded", True):
-        await resources.async_load()
-
-    for item in resources.async_items():
-        item_url = item.get("url", "")
-        base_url = item_url.split("?")[0]
-        if base_url == url:
-            if item_url != url_with_version:
-                await resources.async_update_item(
-                    item["id"],
-                    {"res_type": "module", "url": url_with_version},
-                )
-            return True
-
-    await resources.async_create_item(
-        {"res_type": "module", "url": url_with_version}
-    )
-    return True
+def _normalise_time(hass: HomeAssistant, value: str | None) -> str:
+    """Store UTC ISO timestamps so dates sort consistently across time zones."""
+    if not value:
+        return dt_util.utcnow().isoformat(timespec="microseconds")
+    try:
+        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=dt_util.get_time_zone(hass.config.time_zone))
+        return parsed.astimezone(timezone.utc).isoformat(timespec="microseconds")
+    except (ValueError, TypeError) as err:
+        raise ServiceValidationError(
+            "measured_at must be an ISO 8601 datetime (for example 2026-11-07T12:00:00+07:00)"
+        ) from err
 
 
 def _parse_profile_id(value: Any) -> int | None:
-    """Parse a profile id value that may arrive as '1' or '1.0'."""
+    """Accept numeric ID states, but not nonintegral values or nonfinite floats."""
     try:
-        return int(float(str(value).strip()))
+        number = float(str(value).strip())
     except (TypeError, ValueError):
         return None
-
-
-def _format_state_time(state_obj: Any) -> str | None:
-    """Return last_changed as local ISO text."""
-    if state_obj is None or state_obj.last_changed is None:
+    if not math.isfinite(number) or not number.is_integer():
         return None
-    return dt_util.as_local(state_obj.last_changed).isoformat(timespec="seconds")
+    return int(number)
 
 
-def _calculate_measurement_payload(config: dict[str, Any], weight_kg: float) -> dict[str, Any]:
-    """Calculate BMI and warning payload for a configured person."""
+def _weight_from_state(state: Any) -> float | None:
+    """Convert known device weight units to kilograms."""
+    try:
+        weight = float(state.state)
+    except (ValueError, TypeError):
+        return None
+    unit = str(state.attributes.get("unit_of_measurement") or "kg").strip().lower()
+    if unit in ("kg", "kilogram", "kilograms"):
+        pass
+    elif unit in ("g", "gram", "grams"):
+        weight /= 1000
+    elif unit in ("lb", "lbs", "pound", "pounds"):
+        weight *= 0.45359237
+    elif unit in ("oz", "ounce", "ounces"):
+        weight *= 0.028349523125
+    else:
+        _LOGGER.warning("Weight sensor %s has unsupported unit %r", state.entity_id, unit)
+        return None
+    if not math.isfinite(weight) or not 1 <= weight <= 300:
+        _LOGGER.debug("Ignoring out-of-range weight state for %s: %s %s", state.entity_id, state.state, unit)
+        return None
+    return round(weight, 3)
+
+
+def _state_timestamp(state: Any) -> datetime | None:
+    timestamp = getattr(state, "last_changed", None)
+    if timestamp is None:
+        return None
+    return timestamp if timestamp.tzinfo is not None else timestamp.replace(tzinfo=timezone.utc)
+
+
+def _calculate_measurement_payload(
+    config: dict[str, Any], weight_kg: float, measured_at: str, local_timezone: Any = None
+) -> dict[str, Any]:
+    """Compute BMI and age as of the measurement date, not the current date."""
     bmi = calculate_bmi(weight_kg, float(config[CONF_HEIGHT_M]))
+    measurement_datetime = datetime.fromisoformat(measured_at)
+    if local_timezone is not None and measurement_datetime.tzinfo is not None:
+        measurement_datetime = measurement_datetime.astimezone(local_timezone)
     classification = classify_bmi(
         bmi,
         str(config["gender"]),
         int(config["birth_year"]),
         int(config["birth_month"]),
-        dt_util.now().date(),
+        measurement_datetime.date(),
     )
     return {
         "bmi": bmi,
@@ -159,370 +168,404 @@ def _calculate_measurement_payload(config: dict[str, Any], weight_kg: float) -> 
     }
 
 
-async def _ensure_storage_ready(runtime: dict[str, Any]) -> bool:
-    """Wait for the lightweight background storage preparation when needed."""
-    storage_task = runtime.get("storage_task")
-    if storage_task is not None and not storage_task.done():
-        await storage_task
-    return bool(runtime.get("storage_ready"))
+async def init_resource(hass: HomeAssistant, url: str, version: str) -> None:
+    """Register a single dashboard module, compatible with storage and YAML resources."""
+    resource_url = f"{url}?v={version}"
+    lovelace = hass.data.get("lovelace")
+    resources = getattr(lovelace, "resources", None)
+    if resources is None and isinstance(lovelace, dict):
+        resources = lovelace.get("resources")
+    if resources is None or not hasattr(resources, "async_items"):
+        add_extra_js_url(hass, resource_url)
+        _LOGGER.debug("Loaded card using frontend extra JS URL (Lovelace resources unavailable)")
+        return
+
+    if hasattr(resources, "async_get_info"):
+        await resources.async_get_info()
+    elif hasattr(resources, "async_load") and not getattr(resources, "loaded", False):
+        await resources.async_load()
+
+    for item in resources.async_items():
+        if item.get("url", "").split("?", 1)[0] != url:
+            continue
+        if item["url"] != resource_url or item.get("type", item.get("res_type")) != "module":
+            if hasattr(resources, "async_update_item"):
+                await resources.async_update_item(
+                    item["id"], {"res_type": "module", "url": resource_url}
+                )
+        _LOGGER.debug("Smart Scale BMI dashboard resource available: %s", resource_url)
+        return
+
+    if getattr(lovelace, "mode", "storage") == "yaml" or not hasattr(resources, "async_create_item"):
+        # YAML users control resources. An extra URL makes the bundled card work
+        # without attempting to write a read-only resource collection.
+        add_extra_js_url(hass, resource_url)
+        _LOGGER.info("Registered card via extra JS URL (YAML-managed Lovelace resources)")
+        return
+
+    await resources.async_create_item({"res_type": "module", "url": resource_url})
+    _LOGGER.info("Created Lovelace resource %s", resource_url)
 
 
-async def async_setup(hass: HomeAssistant, config: dict) -> bool:
-    """Set up integration-level services and frontend assets."""
+def _runtime_for_service(hass: HomeAssistant, entry_id: str) -> dict[str, Any]:
+    runtime = hass.data.get(DOMAIN, {}).get(entry_id)
+    if runtime is None or runtime.get("unloading"):
+        raise ServiceValidationError(f"Smart Scale BMI entry {entry_id} is not loaded")
+    return runtime
+
+
+async def _ensure_storage_ready(runtime: dict[str, Any]) -> None:
+    task = runtime.get("storage_task")
+    if task is not None and not task.done():
+        await task
+    if not runtime.get("storage_ready"):
+        raise ServiceValidationError(
+            "Smart Scale BMI database is not ready; check integration logs or reload the entry"
+        )
+
+
+async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
+    """Register HTTP resources and actions once (not once per person)."""
     hass.data.setdefault(DOMAIN, {})
-
+    frontend_path = Path(__file__).parent / "frontend"
     await hass.http.async_register_static_paths(
-        [
-            StaticPathConfig(
-                UI_URL_BASE,
-                hass.config.path("custom_components", DOMAIN, UI_DIR_PATH),
-                False,
+        [StaticPathConfig(UI_URL_BASE, str(frontend_path), False)]
+    )
+
+    async def _register_card() -> None:
+        try:
+            integration = await async_get_integration(hass, DOMAIN)
+            await init_resource(
+                hass,
+                f"{UI_URL_BASE}/{CARD_FILE}",
+                str(integration.version or "2026.11.0"),
             )
-        ]
+        except Exception:
+            _LOGGER.exception("Cannot register Smart Scale BMI dashboard card resource")
+
+    hass.async_create_background_task(
+        _register_card(), f"{DOMAIN} register dashboard card", eager_start=False
     )
 
     async def handle_add_measurement(call: ServiceCall) -> None:
         entry_id = call.data["entry_id"]
-        runtime = hass.data.get(DOMAIN, {}).get(entry_id)
-        if not runtime:
-            _LOGGER.warning("Cannot add measurement: entry_id %s is not loaded", entry_id)
-            return
-
-        if not await _ensure_storage_ready(runtime):
-            _LOGGER.warning("Cannot add measurement: storage is not ready for entry_id %s", entry_id)
-            return
-
-        entry: ConfigEntry = runtime["entry"]
-        db_path: str = runtime["db_path"]
-        config_data = get_config(entry)
-        weight_kg = float(call.data["weight_kg"])
-        measured_at = call.data.get("measured_at") or dt_util.now().isoformat(timespec="seconds")
-        payload = _calculate_measurement_payload(config_data, weight_kg)
-
-        await hass.async_add_executor_job(
-            partial(
-                insert_measurement,
-                db_path,
-                entry_id=entry_id,
-                config=config_data,
-                measured_at=measured_at,
-                weight_kg=weight_kg,
-                **payload,
-            )
+        runtime = _runtime_for_service(hass, entry_id)
+        await _ensure_storage_ready(runtime)
+        weight = call.data["weight_kg"]
+        data = get_config(runtime["entry"])
+        measured_at = _normalise_time(hass, call.data.get("measured_at"))
+        payload = _calculate_measurement_payload(
+            data, weight, measured_at, dt_util.get_time_zone(hass.config.time_zone)
         )
+        async with runtime["record_lock"]:
+            try:
+                record_id = await hass.async_add_executor_job(
+                    partial(
+                        insert_measurement,
+                        runtime["db_path"],
+                        entry_id=entry_id,
+                        config=data,
+                        measured_at=measured_at,
+                        weight_kg=weight,
+                        **payload,
+                    )
+                )
+            except Exception as err:
+                _LOGGER.exception("Manual measurement insert failed for entry %s", entry_id)
+                raise ServiceValidationError("Unable to save measurement; check Home Assistant logs") from err
+        _LOGGER.info("Added manual measurement id=%s entry=%s", record_id, entry_id)
         async_dispatcher_send(hass, f"{SIGNAL_UPDATE_SENSORS}_{entry_id}")
 
     async def handle_delete_measurement(call: ServiceCall) -> None:
         entry_id = call.data["entry_id"]
-        runtime = hass.data.get(DOMAIN, {}).get(entry_id)
-        if not runtime:
-            _LOGGER.warning("Cannot delete measurement: entry_id %s is not loaded", entry_id)
-            return
-
-        if not await _ensure_storage_ready(runtime):
-            _LOGGER.warning("Cannot delete measurement: storage is not ready for entry_id %s", entry_id)
-            return
-
-        deleted = await hass.async_add_executor_job(
-            delete_measurement,
-            runtime["db_path"],
-            entry_id,
-            int(call.data["measurement_id"]),
-        )
+        runtime = _runtime_for_service(hass, entry_id)
+        await _ensure_storage_ready(runtime)
+        measurement_id = call.data["measurement_id"]
+        async with runtime["record_lock"]:
+            try:
+                deleted = await hass.async_add_executor_job(
+                    delete_measurement, runtime["db_path"], entry_id, measurement_id
+                )
+            except Exception as err:
+                _LOGGER.exception("Delete failed entry=%s measurement=%s", entry_id, measurement_id)
+                raise ServiceValidationError("Unable to delete measurement; check logs") from err
         if not deleted:
-            _LOGGER.warning(
-                "No measurement %s found for entry_id %s",
-                call.data["measurement_id"],
-                entry_id,
-            )
+            raise ServiceValidationError(f"Measurement {measurement_id} not found in entry {entry_id}")
+        _LOGGER.info("Deleted measurement id=%s entry=%s", measurement_id, entry_id)
         async_dispatcher_send(hass, f"{SIGNAL_UPDATE_SENSORS}_{entry_id}")
 
     async def handle_update_measurement(call: ServiceCall) -> None:
         entry_id = call.data["entry_id"]
-        runtime = hass.data.get(DOMAIN, {}).get(entry_id)
-        if not runtime:
-            _LOGGER.warning("Cannot update measurement: entry_id %s is not loaded", entry_id)
-            return
+        runtime = _runtime_for_service(hass, entry_id)
+        await _ensure_storage_ready(runtime)
+        measurement_id = call.data["measurement_id"]
+        weight = call.data["weight_kg"]
+        config_data = get_config(runtime["entry"])
+        async with runtime["record_lock"]:
+            try:
+                current = await hass.async_add_executor_job(
+                    get_measurement, runtime["db_path"], entry_id, measurement_id
+                )
+                if current is None:
+                    raise ServiceValidationError(
+                        f"Measurement {measurement_id} not found in entry {entry_id}"
+                    )
+                payload = _calculate_measurement_payload(
+                    config_data, weight, current["measured_at"],
+                    dt_util.get_time_zone(hass.config.time_zone),
+                )
+                updated = await hass.async_add_executor_job(
+                    partial(
+                        update_measurement,
+                        runtime["db_path"],
+                        entry_id=entry_id,
+                        measurement_id=measurement_id,
+                        config=config_data,
+                        measured_at=current["measured_at"],
+                        weight_kg=weight,
+                        **payload,
+                    )
+                )
+            except ServiceValidationError:
+                raise
+            except Exception as err:
+                _LOGGER.exception("Update failed entry=%s measurement=%s", entry_id, measurement_id)
+                raise ServiceValidationError("Unable to update measurement; check logs") from err
+        if not updated:
+            raise ServiceValidationError(f"Measurement {measurement_id} was not updated")
+        _LOGGER.info("Updated measurement id=%s entry=%s", measurement_id, entry_id)
+        async_dispatcher_send(hass, f"{SIGNAL_UPDATE_SENSORS}_{entry_id}")
 
-        if not await _ensure_storage_ready(runtime):
-            _LOGGER.warning("Cannot update measurement: storage is not ready for entry_id %s", entry_id)
-            return
-
-        measurement_id = int(call.data["measurement_id"])
-        current = await hass.async_add_executor_job(
-            get_measurement,
-            runtime["db_path"],
-            entry_id,
-            measurement_id,
-        )
-        if current is None:
-            _LOGGER.warning(
-                "No measurement %s found for entry_id %s",
-                measurement_id,
-                entry_id,
-            )
-            return
-
-        entry: ConfigEntry = runtime["entry"]
-        config_data = get_config(entry)
-        weight_kg = float(call.data["weight_kg"])
-        if weight_kg <= 0:
-            _LOGGER.warning("Cannot update measurement %s: weight must be greater than 0", measurement_id)
-            return
-
-        measured_at = current["measured_at"]
-        payload = _calculate_measurement_payload(config_data, weight_kg)
-
-        updated = await hass.async_add_executor_job(
-            partial(
-                update_measurement,
-                runtime["db_path"],
-                entry_id=entry_id,
-                measurement_id=measurement_id,
-                config=config_data,
-                measured_at=measured_at,
-                weight_kg=weight_kg,
-                **payload,
-            )
-        )
-        if updated:
-            async_dispatcher_send(hass, f"{SIGNAL_UPDATE_SENSORS}_{entry_id}")
-
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_ADD_MEASUREMENT,
-        handle_add_measurement,
-        schema=SERVICE_ADD_MEASUREMENT_SCHEMA,
-    )
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_DELETE_MEASUREMENT,
-        handle_delete_measurement,
-        schema=SERVICE_DELETE_MEASUREMENT_SCHEMA,
-    )
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_UPDATE_MEASUREMENT,
-        handle_update_measurement,
-        schema=SERVICE_UPDATE_MEASUREMENT_SCHEMA,
-    )
+    hass.services.async_register(DOMAIN, "add_measurement", handle_add_measurement, schema=SERVICE_ADD_MEASUREMENT_SCHEMA)
+    hass.services.async_register(DOMAIN, "delete_measurement", handle_delete_measurement, schema=SERVICE_DELETE_MEASUREMENT_SCHEMA)
+    hass.services.async_register(DOMAIN, "update_measurement", handle_update_measurement, schema=SERVICE_UPDATE_MEASUREMENT_SCHEMA)
     return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Set up a Smart Scale BMI config entry without blocking Home Assistant startup."""
-    integration = await async_get_integration(hass, DOMAIN)
-    fallback_version = integration.version if integration and integration.version else "1.0"
-
-    def get_file_version(file_name: str, fallback: str) -> str:
-        try:
-            file_path = hass.config.path(
-                "custom_components", DOMAIN, UI_DIR_PATH, file_name
-            )
-            st = os.stat(file_path)
-            with open(file_path, "rb") as file_obj:
-                digest = hashlib.sha256(file_obj.read()).hexdigest()[:12]
-            return f"{fallback}-{int(st.st_mtime)}-{st.st_size}-{digest}"
-        except Exception:
-            return fallback
-
-    try:
-        ver_card = await hass.async_add_executor_job(
-            get_file_version, CARD_FILE, fallback_version
-        )
-        await init_resource(hass, f"{UI_URL_BASE}/{CARD_FILE}", ver_card)
-    except Exception as err:  # pragma: no cover - defensive runtime logging
-        _LOGGER.exception("Could not register Smart Scale BMI card resource: %s", err)
-
-    config_data = get_config(entry)
-    storage_dir = hass.config.path(DB_DIR)
-    db_path = os.path.join(storage_dir, DB_FILE)
-
+    """Set up a profile without waiting for SQLite initialization at startup."""
+    db_path = str(Path(hass.config.path(DB_DIR)) / DB_FILE)
     runtime: dict[str, Any] = {
         "entry": entry,
         "db_path": db_path,
         "pending_unsub": None,
-        "recording_enable_unsub": None,
-        "last_record_key": None,
         "recording_enabled": hass.state == CoreState.running,
         "storage_ready": False,
         "storage_task": None,
+        "record_lock": asyncio.Lock(),
+        "last_record_key": None,
+        "unloading": False,
+        "last_error": None,
     }
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = runtime
 
-    async def _insert_initial_measurement() -> None:
-        initial_weight = float(config_data.get(CONF_INITIAL_WEIGHT_KG, 0) or 0)
-        if initial_weight <= 0:
-            return
-        existing_count = await hass.async_add_executor_job(count_measurements, db_path, entry.entry_id)
-        if existing_count > 0:
-            return
-        payload = _calculate_measurement_payload(config_data, initial_weight)
-        await hass.async_add_executor_job(
-            partial(
-                insert_measurement,
-                db_path,
-                entry_id=entry.entry_id,
-                config=config_data,
-                measured_at=dt_util.now().isoformat(timespec="seconds"),
-                weight_kg=initial_weight,
-                **payload,
-            )
-        )
-
     async def _prepare_storage() -> None:
-        try:
-            await hass.async_add_executor_job(init_db, db_path)
-            await hass.async_add_executor_job(upsert_person, db_path, entry.entry_id, config_data)
-            await _insert_initial_measurement()
-            runtime["storage_ready"] = True
-            async_dispatcher_send(hass, f"{SIGNAL_UPDATE_SENSORS}_{entry.entry_id}")
-        except Exception as err:  # pragma: no cover - defensive runtime logging
-            runtime["storage_ready"] = False
-            _LOGGER.exception("Could not prepare Smart Scale BMI storage: %s", err)
+        """Run all synchronous SQLite work on executor threads, never HA's event loop."""
+        for attempt in range(1, 4):
+            if runtime["unloading"]:
+                return
+            try:
+                config_data = get_config(entry)
+                await hass.async_add_executor_job(init_db, db_path)
+                await hass.async_add_executor_job(upsert_person, db_path, entry.entry_id, config_data)
+                initial = float(config_data.get(CONF_INITIAL_WEIGHT_KG, 0) or 0)
+                if 1 <= initial <= 300:
+                    async with runtime["record_lock"]:
+                        count = await hass.async_add_executor_job(
+                            count_measurements, db_path, entry.entry_id
+                        )
+                        if count == 0:
+                            initial_time = _normalise_time(hass, None)
+                            payload = _calculate_measurement_payload(
+                                config_data, initial, initial_time,
+                                dt_util.get_time_zone(hass.config.time_zone),
+                            )
+                            await hass.async_add_executor_job(
+                                partial(
+                                    insert_measurement,
+                                    db_path,
+                                    entry_id=entry.entry_id,
+                                    config=config_data,
+                                    measured_at=initial_time,
+                                    weight_kg=initial,
+                                    **payload,
+                                )
+                            )
+                            _LOGGER.info("Initial weight saved entry=%s (user-configured value)", entry.entry_id)
+                runtime["storage_ready"] = True
+                runtime["last_error"] = None
+                _LOGGER.debug("SQLite ready for entry %s", entry.entry_id)
+                async_dispatcher_send(hass, f"{SIGNAL_UPDATE_SENSORS}_{entry.entry_id}")
+                return
+            except asyncio.CancelledError:
+                raise
+            except Exception as err:
+                runtime["last_error"] = type(err).__name__
+                _LOGGER.exception(
+                    "SQLite initialization failed entry=%s attempt=%s/3", entry.entry_id, attempt
+                )
+                if attempt < 3:
+                    await asyncio.sleep(5)
+        _LOGGER.error("SQLite unavailable for entry %s; reload integration after fixing the error", entry.entry_id)
 
-    storage_task = hass.async_create_task(_prepare_storage())
-    runtime["storage_task"] = storage_task
-    entry.async_on_unload(storage_task.cancel)
+    runtime["storage_task"] = entry.async_create_background_task(
+        hass, _prepare_storage(), f"{DOMAIN} database {entry.entry_id}", eager_start=False
+    )
 
     if not runtime["recording_enabled"]:
-
         @callback
-        def _enable_state_recording(*_: Any) -> None:
+        def _enable_recording(_event: Any) -> None:
             runtime["recording_enabled"] = True
-            runtime["recording_enable_unsub"] = None
+            _LOGGER.debug("Scale monitoring enabled after Home Assistant started: %s", entry.entry_id)
 
-        runtime["recording_enable_unsub"] = hass.bus.async_listen_once(
-            EVENT_HOMEASSISTANT_STARTED,
-            _enable_state_recording,
+        entry.async_on_unload(
+            hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, _enable_recording)
         )
-        entry.async_on_unload(runtime["recording_enable_unsub"])
 
     async def _record_weight_from_states() -> None:
-        if not await _ensure_storage_ready(runtime):
+        if runtime["unloading"] or not runtime["recording_enabled"]:
             return
-
-        current_config = get_config(entry)
-        weight_state = hass.states.get(str(current_config[CONF_WEIGHT_SENSOR]))
-        profile_state = hass.states.get(str(current_config[CONF_PROFILE_SENSOR]))
-
-        if weight_state is None or profile_state is None:
-            return
-
-        profile_id = _parse_profile_id(profile_state.state)
-        configured_profile_id = int(current_config[CONF_PROFILE_ID])
-        if profile_id != configured_profile_id:
-            return
-
         try:
-            weight_kg = float(weight_state.state)
-        except (TypeError, ValueError):
+            await _ensure_storage_ready(runtime)
+        except ServiceValidationError:
             return
-
-        if weight_kg <= 0:
-            return
-
-        weight_last_changed = _format_state_time(weight_state)
-        profile_last_changed = _format_state_time(profile_state)
-        record_key = (
-            configured_profile_id,
-            round(weight_kg, 2),
-            weight_last_changed,
-            profile_last_changed,
-        )
-        if runtime.get("last_record_key") == record_key:
-            return
-        runtime["last_record_key"] = record_key
-
-        measured_at = dt_util.now().isoformat(timespec="seconds")
-        payload = _calculate_measurement_payload(current_config, weight_kg)
-
-        await hass.async_add_executor_job(
-            partial(
-                insert_measurement,
-                db_path,
-                entry_id=entry.entry_id,
-                config=current_config,
-                measured_at=measured_at,
-                weight_kg=weight_kg,
-                source_weight_last_changed=weight_last_changed,
-                source_profile_last_changed=profile_last_changed,
-                **payload,
+        async with runtime["record_lock"]:
+            if runtime["unloading"]:
+                return
+            config_data = get_config(entry)
+            weight_state = hass.states.get(str(config_data[CONF_WEIGHT_SENSOR]))
+            profile_state = hass.states.get(str(config_data[CONF_PROFILE_SENSOR]))
+            if weight_state is None or profile_state is None:
+                _LOGGER.debug("Skipped measurement entry=%s: weight/profile state missing", entry.entry_id)
+                return
+            profile_id = _parse_profile_id(profile_state.state)
+            if profile_id != int(config_data[CONF_PROFILE_ID]):
+                _LOGGER.debug("Skipped measurement entry=%s: profile mismatch (%s)", entry.entry_id, profile_id)
+                return
+            weight = _weight_from_state(weight_state)
+            if weight is None:
+                return
+            now = dt_util.utcnow()
+            weight_time = _state_timestamp(weight_state)
+            profile_time = _state_timestamp(profile_state)
+            if weight_time is None or profile_time is None or (
+                abs((weight_time - profile_time).total_seconds()) > SOURCE_PAIR_WINDOW_SECONDS
+                or (now - weight_time).total_seconds() > SOURCE_PAIR_WINDOW_SECONDS
+                or (now - profile_time).total_seconds() > SOURCE_PAIR_WINDOW_SECONDS
+            ):
+                _LOGGER.debug(
+                    "Skipped stale scale pair entry=%s weight_at=%s profile_at=%s window=%ss",
+                    entry.entry_id, weight_time, profile_time, SOURCE_PAIR_WINDOW_SECONDS,
+                )
+                return
+            weight_stamp = weight_time.isoformat(timespec="microseconds")
+            profile_stamp = profile_time.isoformat(timespec="microseconds")
+            record_key = (profile_id, weight_stamp, profile_stamp)
+            if record_key == runtime["last_record_key"]:
+                return
+            try:
+                measurement_time = _normalise_time(hass, None)
+                payload = _calculate_measurement_payload(
+                    config_data, weight, measurement_time,
+                    dt_util.get_time_zone(hass.config.time_zone),
+                )
+                record_id = await hass.async_add_executor_job(
+                    partial(
+                        insert_measurement,
+                        db_path,
+                        entry_id=entry.entry_id,
+                        config=config_data,
+                        measured_at=measurement_time,
+                        weight_kg=weight,
+                        source_weight_last_changed=weight_stamp,
+                        source_profile_last_changed=profile_stamp,
+                        **payload,
+                    )
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                _LOGGER.exception("Automatic measurement failed entry=%s", entry.entry_id)
+                return
+            runtime["last_record_key"] = record_key
+        if record_id is not None:
+            _LOGGER.info(
+                "Scale measurement stored id=%s entry=%s profile=%s",
+                record_id, entry.entry_id, profile_id,
             )
-        )
-        async_dispatcher_send(hass, f"{SIGNAL_UPDATE_SENSORS}_{entry.entry_id}")
+            _LOGGER.debug("Scale measurement weight_kg=%.3f entry=%s", weight, entry.entry_id)
+            async_dispatcher_send(hass, f"{SIGNAL_UPDATE_SENSORS}_{entry.entry_id}")
+        else:
+            _LOGGER.debug("Duplicate scale event ignored entry=%s", entry.entry_id)
 
     @callback
     def _schedule_record(event: Any) -> None:
-        if not runtime.get("recording_enabled"):
+        if not runtime["recording_enabled"] or runtime["unloading"]:
             return
-
-        event_data = getattr(event, "data", {}) or {}
-        old_state = event_data.get("old_state")
-        new_state = event_data.get("new_state")
-        entity_id = event_data.get("entity_id")
-        if old_state is None or new_state is None:
+        data = getattr(event, "data", {}) or {}
+        old_state, new_state = data.get("old_state"), data.get("new_state")
+        if new_state is None:
             return
-
-        old_value = str(old_state.state).strip()
-        new_value = str(new_state.state).strip()
-        if old_value == new_value:
+        entity_id = data.get("entity_id")
+        current = get_config(entry)
+        if entity_id not in (current[CONF_WEIGHT_SENSOR], current[CONF_PROFILE_SENSOR]):
             return
-        if not new_value or new_value.lower() in {"unknown", "unavailable", "none"}:
+        old_value = getattr(old_state, "state", None)
+        new_value = getattr(new_state, "state", None)
+        if old_value == new_value or str(new_value).lower() in {"unknown", "unavailable", "none", ""}:
             return
-        if not old_value or old_value.lower() in {"unknown", "unavailable", "none"}:
+        # Do not infer a measurement on initial startup states; require a real
+        # transition following an existing state, and both sensors to be fresh.
+        if old_value is None or str(old_value).lower() in {"unknown", "unavailable", "none", ""}:
             return
-
-        current_config = get_config(entry)
-        watched_entities = {
-            str(current_config[CONF_WEIGHT_SENSOR]),
-            str(current_config[CONF_PROFILE_SENSOR]),
-        }
-        if entity_id not in watched_entities:
-            return
-
-        pending_unsub = runtime.get("pending_unsub")
-        if pending_unsub is not None:
-            pending_unsub()
+        if runtime["pending_unsub"] is not None:
+            runtime["pending_unsub"]()
 
         @callback
         def _fire_record(_now: datetime) -> None:
             runtime["pending_unsub"] = None
-            hass.async_create_task(_record_weight_from_states())
+            if not runtime["unloading"]:
+                entry.async_create_background_task(
+                    hass, _record_weight_from_states(),
+                    f"{DOMAIN} record {entry.entry_id}", eager_start=False
+                )
 
-        runtime["pending_unsub"] = async_call_later(
-            hass,
-            DEFAULT_DEBOUNCE_SECONDS,
-            _fire_record,
-        )
+        runtime["pending_unsub"] = async_call_later(hass, DEFAULT_DEBOUNCE_SECONDS, _fire_record)
 
+    config = get_config(entry)
     entry.async_on_unload(
         async_track_state_change_event(
-            hass,
-            [str(config_data[CONF_WEIGHT_SENSOR]), str(config_data[CONF_PROFILE_SENSOR])],
-            _schedule_record,
+            hass, [str(config[CONF_WEIGHT_SENSOR]), str(config[CONF_PROFILE_SENSOR])], _schedule_record
         )
     )
-
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    try:
+        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    except Exception:
+        runtime["unloading"] = True
+        hass.data[DOMAIN].pop(entry.entry_id, None)
+        raise
     entry.async_on_unload(entry.add_update_listener(update_listener))
+    _LOGGER.debug("Smart Scale BMI entry %s ready without waiting for database I/O", entry.entry_id)
     return True
 
 
 async def update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Reload the config entry after options are changed."""
+    """Reload the entry after its options change."""
     await hass.config_entries.async_reload(entry.entry_id)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Unload a config entry."""
+    """Stop active recording and unload sensor entities."""
     runtime = hass.data.get(DOMAIN, {}).get(entry.entry_id)
-    if runtime and runtime.get("pending_unsub") is not None:
-        runtime["pending_unsub"]()
-    if runtime and runtime.get("recording_enable_unsub") is not None:
-        runtime["recording_enable_unsub"]()
-
+    if runtime:
+        runtime["unloading"] = True
+        if runtime["pending_unsub"] is not None:
+            runtime["pending_unsub"]()
+            runtime["pending_unsub"] = None
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
         hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
+        _LOGGER.debug("Unloaded Smart Scale BMI entry %s", entry.entry_id)
+    elif runtime:
+        runtime["unloading"] = False
     return unload_ok

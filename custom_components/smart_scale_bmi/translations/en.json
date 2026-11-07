@@ -14,12 +14,13 @@
           "birth_year": "Birth year",
           "gender": "Gender",
           "height_m": "Height (m)",
-          "initial_weight_kg": "Initial weight (kg)"
+          "initial_weight_kg": "Initial weight (kg, 0 = do not create a reading)"
         }
       }
     },
     "error": {
-      "name_required": "Please enter a name."
+      "name_required": "Please enter a name.",
+      "future_birth": "Birth month cannot be in the future."
     },
     "abort": {
       "already_configured": "This profile is already configured."
@@ -39,12 +40,13 @@
           "birth_year": "Birth year",
           "gender": "Gender",
           "height_m": "Height (m)",
-          "initial_weight_kg": "Initial weight (kg)"
+          "initial_weight_kg": "Initial weight (kg, 0 = do not create a reading)"
         }
       }
     },
     "error": {
-      "name_required": "Please enter a name."
+      "name_required": "Please enter a name.",
+      "future_birth": "Birth month cannot be in the future."
     }
   }
 }

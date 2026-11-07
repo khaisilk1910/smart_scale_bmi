@@ -8,7 +8,8 @@ add_measurement:
       required: true
       example: "01JX0000000000000000000000"
       selector:
-        text:
+        config_entry:
+          integration: smart_scale_bmi
     weight_kg:
       name: Cân nặng
       description: Cân nặng cần lưu.
@@ -23,11 +24,11 @@ add_measurement:
           mode: box
     measured_at:
       name: Thời gian cân
-      description: Thời gian cân dạng ISO, bỏ trống sẽ dùng thời gian hiện tại.
+      description: Thời gian cân, bỏ trống sẽ dùng thời gian hiện tại.
       required: false
       example: "2026-06-05T10:30:00+07:00"
       selector:
-        text:
+        datetime: {}
 
 delete_measurement:
   name: Xóa lần cân
@@ -39,7 +40,8 @@ delete_measurement:
       required: true
       example: "01JX0000000000000000000000"
       selector:
-        text:
+        config_entry:
+          integration: smart_scale_bmi
     measurement_id:
       name: Measurement ID
       description: ID bản ghi cân cần xóa.
@@ -62,7 +64,8 @@ update_measurement:
       required: true
       example: "01JX0000000000000000000000"
       selector:
-        text:
+        config_entry:
+          integration: smart_scale_bmi
     measurement_id:
       name: Measurement ID
       description: ID bản ghi cân cần sửa.

@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
-import voluptuous as vol
+import probatio as vol
 
 from homeassistant import config_entries
 from homeassistant.core import callback
@@ -26,13 +26,13 @@ from .const import (
 )
 
 MONTH_OPTIONS = [
-    selector.SelectOptionDict(value=str(month), label=f"Tháng {month}")
+    selector.SelectOptionDict(value=str(month), label=f"{month:02d}")
     for month in range(1, 13)
 ]
 
 GENDER_OPTIONS = [
-    selector.SelectOptionDict(value=GENDER_MALE, label="Nam"),
-    selector.SelectOptionDict(value=GENDER_FEMALE, label="Nữ"),
+    selector.SelectOptionDict(value=GENDER_MALE, label="Male / Nam"),
+    selector.SelectOptionDict(value=GENDER_FEMALE, label="Female / Nữ"),
 ]
 
 
@@ -57,13 +57,13 @@ def _schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
         {
             vol.Required(
                 CONF_WEIGHT_SENSOR,
-                default=defaults.get(CONF_WEIGHT_SENSOR),
+                **({"default": defaults[CONF_WEIGHT_SENSOR]} if CONF_WEIGHT_SENSOR in defaults else {}),
             ): selector.EntitySelector(
                 selector.EntitySelectorConfig(domain="sensor")
             ),
             vol.Required(
                 CONF_PROFILE_SENSOR,
-                default=defaults.get(CONF_PROFILE_SENSOR),
+                **({"default": defaults[CONF_PROFILE_SENSOR]} if CONF_PROFILE_SENSOR in defaults else {}),
             ): selector.EntitySelector(
                 selector.EntitySelectorConfig(domain="sensor")
             ),
@@ -127,10 +127,10 @@ def _schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
             ),
             vol.Required(
                 CONF_INITIAL_WEIGHT_KG,
-                default=defaults.get(CONF_INITIAL_WEIGHT_KG, 65.52),
+                default=defaults.get(CONF_INITIAL_WEIGHT_KG, 0),
             ): selector.NumberSelector(
                 selector.NumberSelectorConfig(
-                    min=1,
+                    min=0,
                     max=300,
                     step=0.01,
                     mode=selector.NumberSelectorMode.BOX,
@@ -160,6 +160,8 @@ class SmartScaleBMIConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             data = _normalise_user_input(user_input)
             if not data[CONF_PERSON_NAME]:
                 errors[CONF_PERSON_NAME] = "name_required"
+            elif (data[CONF_BIRTH_YEAR], data[CONF_BIRTH_MONTH]) > (date.today().year, date.today().month):
+                errors[CONF_BIRTH_MONTH] = "future_birth"
             else:
                 unique_id = (
                     f"{data[CONF_WEIGHT_SENSOR]}|{data[CONF_PROFILE_SENSOR]}|"
@@ -191,6 +193,8 @@ class SmartScaleBMIOptionsFlow(config_entries.OptionsFlow):
             data = _normalise_user_input(user_input)
             if not data[CONF_PERSON_NAME]:
                 errors[CONF_PERSON_NAME] = "name_required"
+            elif (data[CONF_BIRTH_YEAR], data[CONF_BIRTH_MONTH]) > (date.today().year, date.today().month):
+                errors[CONF_BIRTH_MONTH] = "future_birth"
             else:
                 return self.async_create_entry(title="", data=data)
 

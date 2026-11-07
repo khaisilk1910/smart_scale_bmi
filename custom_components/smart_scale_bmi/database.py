@@ -29,9 +29,10 @@ def get_config(entry: ConfigEntry) -> dict[str, Any]:
 def init_db(db_path: str) -> None:
     """Create or migrate the SQLite database."""
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, timeout=15)
     try:
         cur = conn.cursor()
+        cur.execute("PRAGMA journal_mode=WAL")
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS people (
@@ -82,6 +83,15 @@ def init_db(db_path: str) -> None:
         cur.execute(
             "CREATE INDEX IF NOT EXISTS idx_measurements_profile ON measurements(profile_id, measured_at DESC)"
         )
+        # Old versions stored local ISO timestamps, while new writes use UTC.
+        # Index parsed instants so mixed offset rows sort chronologically.
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_measurements_entry_instant "
+            "ON measurements(entry_id, julianday(measured_at) DESC, id DESC)"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_measurements_source ON measurements(entry_id, source_weight_last_changed, source_profile_last_changed)"
+        )
         conn.commit()
     finally:
         conn.close()
@@ -90,7 +100,7 @@ def init_db(db_path: str) -> None:
 def upsert_person(db_path: str, entry_id: str, config: dict[str, Any]) -> None:
     """Insert or update the configured person."""
     now = datetime.now().isoformat(timespec="seconds")
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, timeout=15)
     try:
         cur = conn.cursor()
         cur.execute("SELECT created_at FROM people WHERE entry_id=?", (entry_id,))
@@ -98,11 +108,22 @@ def upsert_person(db_path: str, entry_id: str, config: dict[str, Any]) -> None:
         created_at = row[0] if row else now
         cur.execute(
             """
-            INSERT OR REPLACE INTO people (
+            INSERT INTO people (
                 entry_id, weight_sensor, profile_sensor, profile_id,
                 name, gender, birth_month, birth_year, height_m,
                 initial_weight_kg, created_at, updated_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(entry_id) DO UPDATE SET
+                weight_sensor=excluded.weight_sensor,
+                profile_sensor=excluded.profile_sensor,
+                profile_id=excluded.profile_id,
+                name=excluded.name,
+                gender=excluded.gender,
+                birth_month=excluded.birth_month,
+                birth_year=excluded.birth_year,
+                height_m=excluded.height_m,
+                initial_weight_kg=excluded.initial_weight_kg,
+                updated_at=excluded.updated_at
             """,
             (
                 entry_id,
@@ -126,7 +147,7 @@ def upsert_person(db_path: str, entry_id: str, config: dict[str, Any]) -> None:
 
 def count_measurements(db_path: str, entry_id: str) -> int:
     """Count measurements for an entry."""
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, timeout=15)
     try:
         cur = conn.cursor()
         cur.execute("SELECT COUNT(*) FROM measurements WHERE entry_id=?", (entry_id,))
@@ -149,11 +170,19 @@ def insert_measurement(
     age_text: str | None,
     source_weight_last_changed: str | None = None,
     source_profile_last_changed: str | None = None,
-) -> int:
-    """Insert a new measurement and return its row id."""
-    conn = sqlite3.connect(db_path)
+) -> int | None:
+    """Insert a measurement; return None for an already stored automatic event."""
+    conn = sqlite3.connect(db_path, timeout=15)
     try:
         cur = conn.cursor()
+        if source_weight_last_changed is not None and source_profile_last_changed is not None:
+            cur.execute(
+                """SELECT 1 FROM measurements WHERE entry_id=?
+                AND source_weight_last_changed=? AND source_profile_last_changed=? LIMIT 1""",
+                (entry_id, source_weight_last_changed, source_profile_last_changed),
+            )
+            if cur.fetchone() is not None:
+                return None
         cur.execute(
             """
             INSERT INTO measurements (
@@ -192,7 +221,7 @@ def insert_measurement(
 
 def delete_measurement(db_path: str, entry_id: str, measurement_id: int) -> bool:
     """Delete a measurement for a specific entry."""
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, timeout=15)
     try:
         cur = conn.cursor()
         cur.execute(
@@ -207,7 +236,7 @@ def delete_measurement(db_path: str, entry_id: str, measurement_id: int) -> bool
 
 def get_measurement(db_path: str, entry_id: str, measurement_id: int) -> dict[str, Any] | None:
     """Return one measurement for a specific entry."""
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, timeout=15)
     conn.row_factory = sqlite3.Row
     try:
         cur = conn.cursor()
@@ -235,7 +264,7 @@ def update_measurement(
     age_text: str | None,
 ) -> bool:
     """Update a measurement and return whether a row was changed."""
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, timeout=15)
     try:
         cur = conn.cursor()
         cur.execute(
@@ -280,7 +309,7 @@ def _row_to_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
 
 def get_latest_measurement(db_path: str, entry_id: str) -> dict[str, Any] | None:
     """Return the latest measurement."""
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, timeout=15)
     conn.row_factory = sqlite3.Row
     try:
         cur = conn.cursor()
@@ -288,7 +317,7 @@ def get_latest_measurement(db_path: str, entry_id: str) -> dict[str, Any] | None
             """
             SELECT * FROM measurements
             WHERE entry_id=?
-            ORDER BY measured_at DESC, id DESC
+            ORDER BY julianday(measured_at) DESC, id DESC
             LIMIT 1
             """,
             (entry_id,),
@@ -300,15 +329,15 @@ def get_latest_measurement(db_path: str, entry_id: str) -> dict[str, Any] | None
 
 def get_recent_measurements(db_path: str, entry_id: str, limit: int = 20) -> list[dict[str, Any]]:
     """Return recent measurements in reverse chronological order."""
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, timeout=15)
     conn.row_factory = sqlite3.Row
     try:
         cur = conn.cursor()
         cur.execute(
             """
-            SELECT * FROM measurements
+            SELECT id, entry_id, measured_at, weight_kg, bmi, warning FROM measurements
             WHERE entry_id=?
-            ORDER BY measured_at DESC, id DESC
+            ORDER BY julianday(measured_at) DESC, id DESC
             LIMIT ?
             """,
             (entry_id, int(limit)),
@@ -318,9 +347,31 @@ def get_recent_measurements(db_path: str, entry_id: str, limit: int = 20) -> lis
         conn.close()
 
 
+def get_sensor_snapshot(db_path: str, entry_id: str, limit: int = 60) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+    """Fetch the last reading and compact chart history in a single executor job."""
+    conn = sqlite3.connect(db_path, timeout=15)
+    conn.row_factory = sqlite3.Row
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT * FROM measurements WHERE entry_id=? ORDER BY julianday(measured_at) DESC, id DESC LIMIT 1",
+            (entry_id,),
+        )
+        latest = _row_to_dict(cur.fetchone())
+        cur.execute(
+            """SELECT id, entry_id, measured_at, weight_kg, bmi, warning
+               FROM measurements WHERE entry_id=?
+               ORDER BY julianday(measured_at) DESC, id DESC LIMIT ?""",
+            (entry_id, max(1, min(60, int(limit)))),
+        )
+        return latest, [_row_to_dict(row) for row in cur.fetchall()]
+    finally:
+        conn.close()
+
+
 def get_person(db_path: str, entry_id: str) -> dict[str, Any] | None:
     """Return person configuration stored in the database."""
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, timeout=15)
     conn.row_factory = sqlite3.Row
     try:
         cur = conn.cursor()

@@ -7,6 +7,7 @@ from typing import Any
 from homeassistant.components.sensor import SensorEntity, SensorStateClass
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
@@ -23,7 +24,7 @@ from .const import (
     GENDER_LABELS,
     SIGNAL_UPDATE_SENSORS,
 )
-from .database import get_config, get_latest_measurement, get_recent_measurements
+from .database import get_config, get_sensor_snapshot
 from .who import format_weight_standard_delta, nutrition_advice_for_warning
 
 _LOGGER = logging.getLogger(__name__)
@@ -41,7 +42,7 @@ async def async_setup_entry(
 class SmartScaleBMISensor(SensorEntity):
     """Latest BMI sensor for one configured person."""
 
-    _attr_has_entity_name = False
+    _attr_has_entity_name = True
     _attr_icon = "mdi:scale-bathroom"
     _attr_native_unit_of_measurement = "kg/m²"
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -54,14 +55,14 @@ class SmartScaleBMISensor(SensorEntity):
         self._entry_id = entry.entry_id
         self._db_path = hass.data[DOMAIN][entry.entry_id]["db_path"]
         config = get_config(entry)
-        self._attr_name = f"{config[CONF_PERSON_NAME]} BMI"
+        self._attr_name = "BMI"
         self._attr_unique_id = f"{entry.entry_id}_bmi"
-        self._attr_device_info = {
-            "identifiers": {(DOMAIN, entry.entry_id)},
-            "name": f"Smart Scale BMI - {config[CONF_PERSON_NAME]}",
-            "manufacturer": "Custom Integration",
-            "model": "Smart Scale BMI Profile",
-        }
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, entry.entry_id)},
+            name=f"Smart Scale BMI - {config[CONF_PERSON_NAME]}",
+            manufacturer="Smart Scale BMI",
+            model="Smart Scale BMI Profile",
+        )
         self._attr_native_value: float | None = None
         self._attr_extra_state_attributes: dict[str, Any] = {}
 
@@ -76,8 +77,7 @@ class SmartScaleBMISensor(SensorEntity):
             )
         )
         runtime = self.hass.data.get(DOMAIN, {}).get(self._entry_id, {})
-        if runtime.get("storage_ready"):
-            self.async_schedule_update_ha_state(True)
+        self.async_schedule_update_ha_state(True)
 
     @callback
     def _handle_update_signal(self, *_: Any) -> None:
@@ -87,12 +87,13 @@ class SmartScaleBMISensor(SensorEntity):
     async def async_update(self) -> None:
         """Update the sensor state from SQLite."""
         runtime = self.hass.data.get(DOMAIN, {}).get(self._entry_id, {})
-        if not runtime.get("storage_ready", True):
+        if not runtime.get("storage_ready", False):
             config = get_config(self.entry)
             gender_label = GENDER_LABELS.get(str(config[CONF_GENDER]), str(config[CONF_GENDER]))
             self._attr_native_value = None
             self._attr_extra_state_attributes = {
                 "entry_id": self._entry_id,
+                "integration": DOMAIN,
                 "profile_id": int(config[CONF_PROFILE_ID]),
                 "name": config[CONF_PERSON_NAME],
                 "gender": gender_label,
@@ -108,35 +109,30 @@ class SmartScaleBMISensor(SensorEntity):
             return
 
         try:
-            latest = await self.hass.async_add_executor_job(
-                get_latest_measurement,
-                self._db_path,
-                self._entry_id,
-            )
-            recent = await self.hass.async_add_executor_job(
-                get_recent_measurements,
-                self._db_path,
-                self._entry_id,
-                100,
+            latest, recent = await self.hass.async_add_executor_job(
+                get_sensor_snapshot, self._db_path, self._entry_id, 60
             )
         except Exception as err:  # pragma: no cover - defensive for runtime HA logging
-            _LOGGER.exception("Could not read Smart Scale BMI database: %s", err)
+            _LOGGER.exception("Could not read Smart Scale BMI database for entry %s: %s", self._entry_id, err)
+            self._attr_available = False
             return
 
+        self._attr_available = True
         config = get_config(self.entry)
         gender_label = GENDER_LABELS.get(str(config[CONF_GENDER]), str(config[CONF_GENDER]))
-        self._attr_name = f"{config[CONF_PERSON_NAME]} BMI"
-        self._attr_device_info = {
-            "identifiers": {(DOMAIN, self.entry.entry_id)},
-            "name": f"Smart Scale BMI - {config[CONF_PERSON_NAME]}",
-            "manufacturer": "Custom Integration",
-            "model": "Smart Scale BMI Profile",
-        }
+        self._attr_name = "BMI"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, self.entry.entry_id)},
+            name=f"Smart Scale BMI - {config[CONF_PERSON_NAME]}",
+            manufacturer="Smart Scale BMI",
+            model="Smart Scale BMI Profile",
+        )
 
         if latest is None:
             self._attr_native_value = None
             self._attr_extra_state_attributes = {
                 "entry_id": self._entry_id,
+                "integration": DOMAIN,
                 "profile_id": int(config[CONF_PROFILE_ID]),
                 "name": config[CONF_PERSON_NAME],
                 "gender": gender_label,
@@ -164,6 +160,7 @@ class SmartScaleBMISensor(SensorEntity):
         nutrition_advice = nutrition_advice_for_warning(latest_warning, latest_age_months)
         attrs: dict[str, Any] = {
             "entry_id": self._entry_id,
+            "integration": DOMAIN,
             "measurement_id": latest["id"],
             "profile_id": latest["profile_id"],
             "name": latest["name"],
